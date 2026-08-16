@@ -210,6 +210,29 @@ static HWND g_gameHwnd = nullptr;
 static int g_guiToggleVK = VK_INSERT;
 static bool g_pluginActive = true;
 
+#define OFF_BIPEDIK_FIX_TRANSFORMS    0x18
+#define OFF_BIPEDIK_SOLVERS           0x40
+
+#define OFF_SOLVERS_LEFT_FOOT         0x10
+#define OFF_SOLVERS_RIGHT_FOOT        0x18
+#define OFF_SOLVERS_LEFT_HAND         0x20
+#define OFF_SOLVERS_RIGHT_HAND        0x28
+#define OFF_SOLVERS_SPINE             0x30
+#define OFF_SOLVERS_LOOKAT            0x38
+#define OFF_SOLVERS_AIM               0x40
+
+#define OFF_IKSOLVER_IKPOS_X          0x14
+#define OFF_IKSOLVER_IKPOS_Y          0x18
+#define OFF_IKSOLVER_IKPOS_Z          0x1C
+#define OFF_IKSOLVER_IKPOS_WEIGHT     0x20
+#define OFF_IKSOLVER_ON_PRE_UPDATE    0x38
+#define OFF_IKSOLVER_ON_POST_UPDATE   0x40
+
+#define OFF_IKTRIG_TARGET             0x58
+#define OFF_IKLIMB_BEND_GOAL          0xB8
+
+#define OFF_GROUNDER_WEIGHT           0x18
+
 struct EnumWindowCtx { DWORD pid; HWND result; };
 
 static BOOL CALLBACK EnumWindowProc(HWND hwnd, LPARAM lParam) {
@@ -422,6 +445,8 @@ static int OFF_morphMappingNames =
     -1; 
 static int OFF_entityComplexAnim = -1;   
 static int OFF_complexAnimAnimator = -1; 
+static int OFF_smcEyeLookAt = -1;        
+static int OFF_skMorphCompCore = -1;     
 
 static void *g_findFloorMethod = nullptr;
 static int g_offCurrentFloor = 0x2E8;

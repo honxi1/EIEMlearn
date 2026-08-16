@@ -66,6 +66,10 @@ static void ResolveSMCOffsets(void *smcClass) {
   OFF_mainEmotion = getOff("m_mainEmotion");
   OFF_poseDictMorph = getOff("m_poseDictMorph");
   OFF_microExprWeights = getOff("m_microExpressionWeights");
+  OFF_smcEyeLookAt = getOff("m_isEyeLookAtIKEnable");
+  if (OFF_smcEyeLookAt < 0) OFF_smcEyeLookAt = getOff("enableEyeLookAtIK");
+  if (OFF_smcEyeLookAt < 0) OFF_smcEyeLookAt = getOff("m_enableEyeLookAtIK");
+  if (OFF_smcEyeLookAt < 0) OFF_smcEyeLookAt = getOff("_enableEyeLookAtIK");
 
   Log("[OFFSET] allMorphs=%d poseCache=%d bigList=%d hashMap=%d", OFF_allMorphs,
       OFF_poseCache, OFF_bigList, OFF_nativeHashMap);
@@ -523,8 +527,9 @@ static void __fastcall Hooked_MorphToBoneJob(void *__this, void *param1,
     if (!s_eyeIKDisabled) {
       s_eyeIKDisabled = true;
       __try {
-        *(bool *)((char *)g_confirmedSMC + 0x1dd) = false;
-        Log("[IK-DISABLE] SMC EyeLookAtIK DISABLED at SMC confirm (0x1dd=false)");
+        int eyeOff = SafeOff(OFF_smcEyeLookAt, 0x1dd, "enableEyeLookAtIK");
+        *(bool *)((char *)g_confirmedSMC + eyeOff) = false;
+        Log("[IK-DISABLE] SMC EyeLookAtIK DISABLED at SMC confirm (offset 0x%X=false)", eyeOff);
       } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("[IK-DISABLE] Failed to disable SMC EyeLookAtIK at confirm");
       }

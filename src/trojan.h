@@ -837,7 +837,19 @@ static void __fastcall Hooked_MovementComponent_Tick(void *self, float deltaTime
               void *exc = nullptr;
               void *skMorphComp = il2cpp_runtime_invoke(getSkMorph, entity, nullptr, &exc);
               if (skMorphComp && !exc) {
-                void *core = *(void **)((char *)skMorphComp + 0x150);
+                if (OFF_skMorphCompCore < 0) {
+                  void *smcCompClass = il2cpp_object_get_class(skMorphComp);
+                  if (smcCompClass) {
+                    const char *coreNames[] = {"m_core", "core", "_core", "m_skeletalMorphCore"};
+                    int resolved = FindFieldInHierarchy(smcCompClass, coreNames, 4, nullptr);
+                    if (resolved >= 0) {
+                      OFF_skMorphCompCore = resolved;
+                      Log("[GF2-HOOK] Resolved SkeletalMorphComponent.m_core offset = 0x%X", resolved);
+                    }
+                  }
+                }
+                int coreOff = SafeOff(OFF_skMorphCompCore, 0x150, "skMorphCompCore");
+                void *core = *(void **)((char *)skMorphComp + coreOff);
                 if (core == g_confirmedSMC) {
                   s_cachedMovementComp = self;
                   s_cachedEntity = entity;
@@ -874,16 +886,16 @@ static void __fastcall Hooked_OnUpdate(void *self, void *methodInfo) {
   __try {
     if (g_mmdIKActive) {
       if (self == g_activeLfSolver && g_activeLfSolver) {
-        *(float *)((char *)self + 0x14) = s_curFootTargetL[0];
-        *(float *)((char *)self + 0x18) = s_curFootTargetL[1];
-        *(float *)((char *)self + 0x1c) = s_curFootTargetL[2];
-        *(float *)((char *)self + 0x20) = 1.0f;
+        *(float *)((char *)self + OFF_IKSOLVER_IKPOS_X) = s_curFootTargetL[0];
+        *(float *)((char *)self + OFF_IKSOLVER_IKPOS_Y) = s_curFootTargetL[1];
+        *(float *)((char *)self + OFF_IKSOLVER_IKPOS_Z) = s_curFootTargetL[2];
+        *(float *)((char *)self + OFF_IKSOLVER_IKPOS_WEIGHT) = 1.0f;
       }
       else if (self == g_activeRfSolver && g_activeRfSolver) {
-        *(float *)((char *)self + 0x14) = s_curFootTargetR[0];
-        *(float *)((char *)self + 0x18) = s_curFootTargetR[1];
-        *(float *)((char *)self + 0x1c) = s_curFootTargetR[2];
-        *(float *)((char *)self + 0x20) = 1.0f;
+        *(float *)((char *)self + OFF_IKSOLVER_IKPOS_X) = s_curFootTargetR[0];
+        *(float *)((char *)self + OFF_IKSOLVER_IKPOS_Y) = s_curFootTargetR[1];
+        *(float *)((char *)self + OFF_IKSOLVER_IKPOS_Z) = s_curFootTargetR[2];
+        *(float *)((char *)self + OFF_IKSOLVER_IKPOS_WEIGHT) = 1.0f;
       }
     }
   } __except (EXCEPTION_EXECUTE_HANDLER) {}
@@ -933,20 +945,20 @@ static void ConfigureIKComponents(bool footIKEnabled) {
           int trueVal = 1; void *params[] = {&trueVal};
           __try { Invoke(g_animator_set_enabled, s_bipedIK[bi], params); } __except(1) {}
         }
-        *(bool *)((char *)s_bipedIK[bi] + 0x18) = false; 
+        *(bool *)((char *)s_bipedIK[bi] + OFF_BIPEDIK_FIX_TRANSFORMS) = false; 
         __try {
-          void *solvers = *(void **)((char *)s_bipedIK[bi] + 0x40);
+          void *solvers = *(void **)((char *)s_bipedIK[bi] + OFF_BIPEDIK_SOLVERS);
           if (solvers) {
-            void *lh = *(void **)((char *)solvers + 0x20);
-            void *rh = *(void **)((char *)solvers + 0x28);
-            void *sp = *(void **)((char *)solvers + 0x30);
-            void *la = *(void **)((char *)solvers + 0x38);
-            void *aim = *(void **)((char *)solvers + 0x40);
-            if (lh) *(float *)((char *)lh + 0x20) = 0.0f;
-            if (rh) *(float *)((char *)rh + 0x20) = 0.0f;
-            if (sp) *(float *)((char *)sp + 0x20) = 0.0f;
-            if (la) *(float *)((char *)la + 0x20) = 0.0f;
-            if (aim) *(float *)((char *)aim + 0x20) = 0.0f;
+            void *lh = *(void **)((char *)solvers + OFF_SOLVERS_LEFT_HAND);
+            void *rh = *(void **)((char *)solvers + OFF_SOLVERS_RIGHT_HAND);
+            void *sp = *(void **)((char *)solvers + OFF_SOLVERS_SPINE);
+            void *la = *(void **)((char *)solvers + OFF_SOLVERS_LOOKAT);
+            void *aim = *(void **)((char *)solvers + OFF_SOLVERS_AIM);
+            if (lh) *(float *)((char *)lh + OFF_IKSOLVER_IKPOS_WEIGHT) = 0.0f;
+            if (rh) *(float *)((char *)rh + OFF_IKSOLVER_IKPOS_WEIGHT) = 0.0f;
+            if (sp) *(float *)((char *)sp + OFF_IKSOLVER_IKPOS_WEIGHT) = 0.0f;
+            if (la) *(float *)((char *)la + OFF_IKSOLVER_IKPOS_WEIGHT) = 0.0f;
+            if (aim) *(float *)((char *)aim + OFF_IKSOLVER_IKPOS_WEIGHT) = 0.0f;
           }
         } __except (1) {}
       }
@@ -958,9 +970,9 @@ static void ConfigureIKComponents(bool footIKEnabled) {
           __try { Invoke(g_animator_set_enabled, s_grounderIK[gi], params); } __except(1) {}
         }
         __try {
-          *(float *)((char *)s_grounderIK[gi] + 0x18) = 0.0f;
-          *(float *)((char *)s_grounderIK[gi] + 0x1c) = 0.0f;
-          *(float *)((char *)s_grounderIK[gi] + 0x20) = 0.0f;
+          *(float *)((char *)s_grounderIK[gi] + OFF_GROUNDER_WEIGHT) = 0.0f;
+          *(float *)((char *)s_grounderIK[gi] + OFF_GROUNDER_WEIGHT + 4) = 0.0f;
+          *(float *)((char *)s_grounderIK[gi] + OFF_GROUNDER_WEIGHT + 8) = 0.0f;
         } __except (1) {}
       }
     }
@@ -1459,20 +1471,20 @@ static void ApplyMmdPoseOnMainThread() {
             if (g_footIKEnabled && s_footIKCalibrated && s_bipedIKCount > 0) {
               void *bipedIK = s_bipedIK[0];
               if (bipedIK) {
-                void *solvers = *(void **)((char *)bipedIK + 0x40);
+                void *solvers = *(void **)((char *)bipedIK + OFF_BIPEDIK_SOLVERS);
                 if (solvers) {
-                  void *lfSolver = *(void **)((char *)solvers + 0x10);
-                  void *rfSolver = *(void **)((char *)solvers + 0x18);
+                  void *lfSolver = *(void **)((char *)solvers + OFF_SOLVERS_LEFT_FOOT);
+                  void *rfSolver = *(void **)((char *)solvers + OFF_SOLVERS_RIGHT_FOOT);
 
                   if (lfSolver) {
-                    *(void **)((char *)lfSolver + 0x38) = nullptr;
-                    *(void **)((char *)lfSolver + 0x40) = nullptr;
-                    *(void **)((char *)lfSolver + 0x58) = nullptr;
+                    *(void **)((char *)lfSolver + OFF_IKSOLVER_ON_PRE_UPDATE) = nullptr;
+                    *(void **)((char *)lfSolver + OFF_IKSOLVER_ON_POST_UPDATE) = nullptr;
+                    *(void **)((char *)lfSolver + OFF_IKTRIG_TARGET) = nullptr;
                   }
                   if (rfSolver) {
-                    *(void **)((char *)rfSolver + 0x38) = nullptr;
-                    *(void **)((char *)rfSolver + 0x40) = nullptr;
-                    *(void **)((char *)rfSolver + 0x58) = nullptr;
+                    *(void **)((char *)rfSolver + OFF_IKSOLVER_ON_PRE_UPDATE) = nullptr;
+                    *(void **)((char *)rfSolver + OFF_IKSOLVER_ON_POST_UPDATE) = nullptr;
+                    *(void **)((char *)rfSolver + OFF_IKTRIG_TARGET) = nullptr;
                   }
 
                   *(bool *)((char *)bipedIK + 0x30) = true;   
@@ -1739,8 +1751,9 @@ static void ApplyMmdPoseOnMainThread() {
           if (g_confirmedSMC && !s_eyeIKDisabled) {
             s_eyeIKDisabled = true;
             __try {
-              *(bool *)((char *)g_confirmedSMC + 0x1dd) = false;
-              Log("[IK-DISABLE] SMC EyeLookAtIK DISABLED (0x1dd=false)");
+              int eyeOff = SafeOff(OFF_smcEyeLookAt, 0x1dd, "enableEyeLookAtIK");
+              *(bool *)((char *)g_confirmedSMC + eyeOff) = false;
+              Log("[IK-DISABLE] SMC EyeLookAtIK DISABLED (offset 0x%X=false)", eyeOff);
             } __except (EXCEPTION_EXECUTE_HANDLER) {
               Log("[IK-DISABLE] Failed to disable SMC EyeLookAtIK");
             }

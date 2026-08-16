@@ -867,14 +867,6 @@ static DWORD WINAPI InitThread(LPVOID) {
 
   {
     uintptr_t gaBase2 = (uintptr_t)GetModuleHandleW(L"GameAssembly.dll");
-    void *lateUpdateAddr = (void *)(gaBase2 + 0x035BD200); 
-    if (MH_CreateHook(lateUpdateAddr, (void *)Hooked_SolverManager_LateUpdate,
-                      &s_origLateUpdate) == MH_OK) {
-      MH_EnableHook(lateUpdateAddr);
-      Log("[IK] SolverManager.LateUpdate hooked at %p (orig=%p)", lateUpdateAddr, s_origLateUpdate);
-    } else {
-      Log("[IK] WARN: Failed to hook SolverManager.LateUpdate at %p", lateUpdateAddr);
-    }
 
     void *moveCompClass = FindClass("Beyond.Gameplay.Core", "MovementComponent", asms, ac);
     if (moveCompClass) {
@@ -916,22 +908,54 @@ static DWORD WINAPI InitThread(LPVOID) {
       Log("[GF2] WARN: MovementComponent class not found");
     }
 
-    void *updateSolverAddr = (void *)(gaBase2 + 0x0326A380);
-    if (MH_CreateHook(updateSolverAddr, (void *)Hooked_IK_UpdateSolver,
-                      &s_origUpdateSolver) == MH_OK) {
-      MH_EnableHook(updateSolverAddr);
-      Log("[IK] BipedIK.UpdateSolver hooked at %p (orig=%p)", updateSolverAddr, s_origUpdateSolver);
+    void *solverMgrClass = FindClass("RootMotion", "SolverManager", asms, ac);
+    if (!solverMgrClass)
+      solverMgrClass = FindClass("RootMotion.FinalIK", "SolverManager", asms, ac);
+    void *lateUpdateMethod = solverMgrClass ? FindMethod(solverMgrClass, "LateUpdate", 0) : nullptr;
+    if (lateUpdateMethod && Hook(lateUpdateMethod, "SolverManager.LateUpdate",
+                                 (void *)Hooked_SolverManager_LateUpdate, &s_origLateUpdate)) {
+      Log("[IK] SolverManager.LateUpdate hooked dynamically via IL2CPP");
     } else {
-      Log("[IK] WARN: Failed to hook BipedIK.UpdateSolver at %p", updateSolverAddr);
+      void *lateUpdateAddr = (void *)(gaBase2 + 0x035BD200);
+      if (MH_CreateHook(lateUpdateAddr, (void *)Hooked_SolverManager_LateUpdate,
+                        &s_origLateUpdate) == MH_OK) {
+        MH_EnableHook(lateUpdateAddr);
+        Log("[IK] SolverManager.LateUpdate hooked via fallback RVA %p", lateUpdateAddr);
+      } else {
+        Log("[IK] WARN: Failed to hook SolverManager.LateUpdate");
+      }
     }
 
-    void *onUpdateAddr = (void *)(gaBase2 + 0x032759E0);
-    if (MH_CreateHook(onUpdateAddr, (void *)Hooked_OnUpdate,
-                      &s_origOnUpdate) == MH_OK) {
-      MH_EnableHook(onUpdateAddr);
-      Log("[IK] IKSolverTrigonometric.OnUpdate hooked at %p (orig=%p)", onUpdateAddr, s_origOnUpdate);
+    void *bipedIKClass = FindClass("RootMotion.FinalIK", "BipedIK", asms, ac);
+    void *updateSolverMethod = bipedIKClass ? FindMethod(bipedIKClass, "UpdateSolver", 0) : nullptr;
+    if (updateSolverMethod && Hook(updateSolverMethod, "BipedIK.UpdateSolver",
+                                   (void *)Hooked_IK_UpdateSolver, &s_origUpdateSolver)) {
+      Log("[IK] BipedIK.UpdateSolver hooked dynamically via IL2CPP");
     } else {
-      Log("[IK] WARN: Failed to hook IKSolverTrigonometric.OnUpdate at %p", onUpdateAddr);
+      void *updateSolverAddr = (void *)(gaBase2 + 0x0326A380);
+      if (MH_CreateHook(updateSolverAddr, (void *)Hooked_IK_UpdateSolver,
+                        &s_origUpdateSolver) == MH_OK) {
+        MH_EnableHook(updateSolverAddr);
+        Log("[IK] BipedIK.UpdateSolver hooked via fallback RVA %p", updateSolverAddr);
+      } else {
+        Log("[IK] WARN: Failed to hook BipedIK.UpdateSolver");
+      }
+    }
+
+    void *ikTrigClass = FindClass("RootMotion.FinalIK", "IKSolverTrigonometric", asms, ac);
+    void *onUpdateMethod = ikTrigClass ? FindMethod(ikTrigClass, "OnUpdate", 0) : nullptr;
+    if (onUpdateMethod && Hook(onUpdateMethod, "IKSolverTrigonometric.OnUpdate",
+                               (void *)Hooked_OnUpdate, &s_origOnUpdate)) {
+      Log("[IK] IKSolverTrigonometric.OnUpdate hooked dynamically via IL2CPP");
+    } else {
+      void *onUpdateAddr = (void *)(gaBase2 + 0x032759E0);
+      if (MH_CreateHook(onUpdateAddr, (void *)Hooked_OnUpdate,
+                        &s_origOnUpdate) == MH_OK) {
+        MH_EnableHook(onUpdateAddr);
+        Log("[IK] IKSolverTrigonometric.OnUpdate hooked via fallback RVA %p", onUpdateAddr);
+      } else {
+        Log("[IK] WARN: Failed to hook IKSolverTrigonometric.OnUpdate");
+      }
     }
   }
 
