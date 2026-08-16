@@ -88,7 +88,7 @@ static void InvestigateCamera() {
       char goName[128] = "";
       if (nameStr) ReadStrUtf8(nameStr, goName, sizeof(goName));
       char tag[160];
-      sprintf(tag, "Parent[%d] '%s'", depth, goName);
+      snprintf(tag, sizeof(tag), "Parent[%d] '%s'", depth, goName);
       ListComponentsOnGameObject(parentGO, tag);
     }
     cur = parent;
@@ -204,8 +204,9 @@ static void RestoreCinemachine() {
 
 static Vec3 SampleCharDisplacement(float timeSec) {
   Vec3 disp = {0, 0, 0};
-  if (!g_vmd) return disp;
-  auto it = g_vmd->boneTimelines.find(
+  VmdFile *vmd = g_footIkVmd ? g_footIkVmd : g_vmd;
+  if (!vmd || !vmd->loaded) return disp;
+  auto it = vmd->boneTimelines.find(
       "\xe3\x82\xbb\xe3\x83\xb3\xe3\x82\xbf\xe3\x83\xbc"); 
   if (it != g_vmd->boneTimelines.end()) {
     float frameF = timeSec * 30.0f;

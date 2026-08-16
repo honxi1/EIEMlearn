@@ -196,17 +196,17 @@ static void RestoreDisabledComponents() {
 
   for (int bi = 0; bi < s_bipedIKCount; bi++) {
     char name[64];
-    sprintf(name, "BipedIK #%d", bi + 1);
+    snprintf(name, sizeof(name), "BipedIK #%d", bi + 1);
     EnableComp(s_bipedIK[bi], name);
   }
   for (int gi = 0; gi < s_grounderIKCount; gi++) {
     char name[64];
-    sprintf(name, "GrounderBipedIK #%d", gi + 1);
+    snprintf(name, sizeof(name), "GrounderBipedIK #%d", gi + 1);
     EnableComp(s_grounderIK[gi], name);
   }
   for (int i = 0; i < s_followDamperCount; i++) {
     char name[64];
-    sprintf(name, "TransformFollowDamper #%d", i + 1);
+    snprintf(name, sizeof(name), "TransformFollowDamper #%d", i + 1);
     EnableComp(s_followDamper[i], name);
   }
   EnableComp(s_animatorMono, "AnimatorMono");
@@ -290,16 +290,16 @@ static void SafeSetAnimatorEnabled(bool enabled) {
 }
 
 static bool ReadWorldPosition(void *transform, Vec3 &out) {
-  if (!g_transform_get_position || !transform)
+  if (!transform)
     return false;
-  __try {
-    void *boxed = Invoke(g_transform_get_position, transform);
-    if (boxed) {
-      float *data = (float *)((char *)boxed + 16);
-      out = {data[0], data[1], data[2]};
+  if (g_camGetPos) {
+    float pos[3] = {};
+    __try {
+      g_camGetPos(transform, pos);
+      out = {pos[0], pos[1], pos[2]};
       return true;
+    } __except (1) {
     }
-  } __except (1) {
   }
   return false;
 }

@@ -1,8 +1,8 @@
 #pragma once
 
 #define EIEM_VERSION_MAJOR 0
-#define EIEM_VERSION_MINOR 1
-#define EIEM_VERSION_PATCH 4
+#define EIEM_VERSION_MINOR 2
+#define EIEM_VERSION_PATCH 0
 
 #define EIEM_STRINGIFY2(x) #x
 #define EIEM_STRINGIFY(x) EIEM_STRINGIFY2(x)
@@ -108,6 +108,7 @@ static VmdFile *g_cameraVmd = nullptr;
 static CameraPlayer g_cameraPlayer;         
 static bool g_cameraActive = false;         
 static bool g_cameraEnabled = true;         
+static bool g_footIKEnabled = true;         
 static float g_playbackSpeed = 1.0f;
 static bool g_playbackLoop = false;
 static bool g_cameraNeedsCapture = false;   
@@ -206,9 +207,40 @@ static void *g_object_get_name = nullptr;
 
 static HWND g_gameHwnd = nullptr;
 
+static int g_guiToggleVK = VK_INSERT;
+static bool g_pluginActive = true;
+
+struct EnumWindowCtx { DWORD pid; HWND result; };
+
+static BOOL CALLBACK EnumWindowProc(HWND hwnd, LPARAM lParam) {
+  auto *ctx = reinterpret_cast<EnumWindowCtx *>(lParam);
+  DWORD wndPid = 0;
+  GetWindowThreadProcessId(hwnd, &wndPid);
+  if (wndPid != ctx->pid) return TRUE; 
+
+  char cls[64] = {};
+  GetClassNameA(hwnd, cls, sizeof(cls));
+  if (strcmp(cls, "UnityWndClass") == 0 && IsWindowVisible(hwnd)) {
+    ctx->result = hwnd;
+    return FALSE; 
+  }
+  return TRUE;
+}
+
+static inline HWND FindGameWindow() {
+  EnumWindowCtx ctx = {};
+  ctx.pid = GetCurrentProcessId();
+  ctx.result = nullptr;
+  EnumWindows(EnumWindowProc, reinterpret_cast<LPARAM>(&ctx));
+  return ctx.result;
+}
+
 static char g_muscleAnimPath[512] = "plugin\\muscle_anim.bin";
 static char g_cameraVmdPath[512] = "plugin\\camera.vmd";
 static char g_morphVmdPath[512] = "";
+static char g_footIkVmdPath[512] = "";
+static VmdFile *g_footIkVmd = nullptr;
+static bool g_footIkResolved = false;
 
 struct AudioPlayer;
 static AudioPlayer *g_audioPlayer = nullptr;
@@ -390,6 +422,12 @@ static int OFF_morphMappingNames =
     -1; 
 static int OFF_entityComplexAnim = -1;   
 static int OFF_complexAnimAnimator = -1; 
+
+static void *g_findFloorMethod = nullptr;
+static int g_offCurrentFloor = 0x2E8;
+static int g_offBaseCompEntity = 0x50;
+static float g_groundDeltaY = 0.0f;
+
 
 #define IL2CPP_STR_LEN      0x10  
 #define IL2CPP_STR_CHARS    0x14  

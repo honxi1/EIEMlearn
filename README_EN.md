@@ -35,15 +35,22 @@ example: [bilibili](https://www.bilibili.com/video/BV1YdEC6bEfP/)
 - **Facial expressions**: Basic expressions including AIUEO, blinks, and smiling eyes
 - **Camera motion**: VMD camera keyframes (with character-facing alignment)
 - **Audio sync**: MCI backend plays WAV/MP3 BGM
+- **Terrain & staircase stepping**: Real-time ground collision probing, adaptively snapping to slopes and stairs
+- **Native IK**: Drives the game's native BipedIK solver using VMD foot IK data
+
+### In Progress
+- **Direct VMD playback mode**
+- 
 
 ### Planned
-- Direct VMD playback mode
 - Multi-character screen playback
 - ...
 
 ## Download
 
 You can download the latest release from [Releases](https://github.com/Sasye/EIEM/releases) or compile it yourself from source.
+
+> Use [Applepie Manager](https://github.com/Sasye/ApplepieManager) to easily manage and configure this plugin.
 
 ## Installation
 

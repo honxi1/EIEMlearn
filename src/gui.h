@@ -269,6 +269,8 @@ static LRESULT CALLBACK GuiWndProc(HWND hWnd, UINT msg, WPARAM wParam,
     return true;
 
   switch (msg) {
+  case WM_MOUSEACTIVATE:
+    return MA_ACTIVATE;
   case WM_SIZE:
     if (g_pd3dDevice && wParam != SIZE_MINIMIZED) {
       CleanupRenderTarget();
@@ -308,8 +310,7 @@ static void DrawMainPanel() {
   ImGui::Begin("EIEM", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-                   ImGuiWindowFlags_NoScrollbar |
-                   ImGuiWindowFlags_NoBringToFrontOnFocus);
+                   ImGuiWindowFlags_NoScrollbar);
   ImGui::PopStyleVar();
 
   const float titleH = 36.0f;
@@ -544,6 +545,11 @@ static void DrawMainPanel() {
   ImGui::Checkbox(u8"\u5faa\u73af", &g_playbackLoop);
   ImGui::SameLine();
   ImGui::Checkbox(u8"\u955c\u5934", &g_cameraEnabled);
+
+  ImGui::Checkbox(u8"\u4e0b\u534a\u8eabIK (\u8d70\u697c\u68af/\u8d34\u5730\u8ddf\u968f)", &g_footIKEnabled);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(u8"\u52fe\u9009: \u4f7f\u7528VMD\u811a\u90e8IK+FinalIK\u89e3\u7b97\u5668+FindFloor\u8d70\u697c\u68af\u8d34\u5730\n\u53d6\u6d88: \u7eaf\u808c\u8089\u6570\u636e\u63a7\u5236\u4e0b\u534a\u8eab(\u7981\u7528\u6e38\u620fIK)");
+  }
   if (g_musclePlayer) {
     g_musclePlayer->speed = g_playbackSpeed;
     g_musclePlayer->loop  = g_playbackLoop;
@@ -654,6 +660,8 @@ static void DrawMainPanel() {
         Log("[GUI] Anim selected: %s", g_muscleAnimPath);
         if (g_muscleAnim) g_muscleAnim->loaded = false;
         if (g_vmd) { g_vmd = nullptr; g_bsIndicesResolved = false; }
+        if (g_footIkVmd) { FreeVmd(g_footIkVmd); g_footIkVmd = nullptr; }
+        g_footIkResolved = false;
         if (g_cameraActive) RestoreCinemachine();
         ResetCameraState();
         if (g_musclePlayer) {
@@ -719,6 +727,53 @@ static void DrawMainPanel() {
       ImGui::TextColored(ImVec4(0.10f, 0.55f, 0.25f, 1.0f),
                          u8"%zu \u5173\u952e\u5e27",
                          g_cameraVmd->cameraKeys.size());
+    } else {
+      ImGui::TextDisabled(u8"\u672a\u52a0\u8f7d");
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.20f, 0.20f, 0.24f, 1.0f), u8"\u4e0b\u534a\u8eab/\u817f\u90e8IK (.vmd)");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 2.0f);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.95f, 0.97f, 1.0f));
+    ImGui::InputText("##footikpath", g_footIkVmdPath, sizeof(g_footIkVmdPath));
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.95f, 0.97f, 1.0f));
+    if (ImGui::Button(u8"\u6d4f\u89c8##footik", ImVec2(80, 0))) {
+      ImGui::PopStyleColor();
+      OPENFILENAMEA ofn = {};
+      char filePath[512] = "";
+      ofn.lStructSize = sizeof(ofn);
+      ofn.hwndOwner = g_guiHwnd;
+      ofn.lpstrFilter = "VMD Files (*.vmd)\0*.vmd\0All Files\0*.*\0";
+      ofn.lpstrFile = filePath;
+      ofn.nMaxFile = sizeof(filePath);
+      ofn.Flags = OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+      if (GetOpenFileNameA(&ofn)) {
+        strncpy(g_footIkVmdPath, filePath, sizeof(g_footIkVmdPath) - 1);
+        g_footIkVmdPath[sizeof(g_footIkVmdPath) - 1] = '\0';
+        Log("[GUI] Foot IK VMD selected: %s", g_footIkVmdPath);
+        if (g_footIkVmd) { FreeVmd(g_footIkVmd); g_footIkVmd = nullptr; }
+        g_footIkResolved = false;
+        s_footIKFirstCaptured = false;
+        s_initialRootCaptured = false;
+        s_footIKCalibrated = false;
+      }
+    } else { ImGui::PopStyleColor(); }
+    ImGui::SameLine();
+    if (g_footIkVmdPath[0] == '\0') {
+      ImGui::TextDisabled(u8"\u7a7a = \u81ea\u52a8\u626b\u63cf");
+    } else {
+      ImGui::TextDisabled(u8"\u64ad\u653e\u65f6\u52a0\u8f7d");
+    }
+
+    VmdFile *curFootVmd = g_footIkVmd ? g_footIkVmd : g_vmd;
+    if (curFootVmd && curFootVmd->loaded && !curFootVmd->boneTimelines.empty()) {
+      ImGui::TextColored(ImVec4(0.10f, 0.55f, 0.25f, 1.0f),
+                         u8"%zu \u9aa8\u9abc\u8f68\u9053 (\u542b\u8db3IK/\u4e2d\u5fc3)",
+                         curFootVmd->boneTimelines.size());
     } else {
       ImGui::TextDisabled(u8"\u672a\u52a0\u8f7d");
     }
@@ -945,6 +1000,62 @@ static void DrawMainPanel() {
       g_scaleLegs = 1.0f; g_scaleFingers = 1.0f;
       g_splayBlend = 0.7f;
     }
+
+    ImGui::EndTabItem();
+  }
+
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.95f, 0.97f, 1.0f));
+  bool tabAbout = ImGui::BeginTabItem(u8"\u5173\u4e8e");
+  ImGui::PopStyleColor();
+  if (tabAbout) {
+    ImGui::Spacing();
+
+    ImGui::TextColored(ImVec4(1.00f, 0.85f, 0.00f, 1.0f), "EIEM");
+    ImGui::SameLine();
+    ImGui::TextDisabled("v%s", EIEM_VERSION);
+    ImGui::TextDisabled(u8"\u660e\u65e5\u65b9\u821f\uff1a\u7ec8\u672b\u5730 \u52a8\u4f5c\u4e0e\u8868\u60c5\u63a7\u5236\u63d2\u4ef6");
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::TextColored(ImVec4(0.90f, 0.75f, 0.20f, 1.0f), u8"\u9879\u76ee\u5f00\u6e90\u5730\u5740");
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(35, 38, 48, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(50, 55, 70, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(25, 28, 38, 255));
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(80, 170, 255, 255));
+    if (ImGui::Button("https://github.com/Sasye/EIEM", ImVec2(-60, 0))) {
+      ShellExecuteA(NULL, "open", "https://github.com/Sasye/EIEM", NULL, NULL, SW_SHOWNORMAL);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(u8"\u70b9\u51fb\u5728\u6d4f\u89c8\u5668\u4e2d\u6253\u5f00 GitHub \u4ed3\u5e93");
+    }
+    ImGui::PopStyleColor(4);
+    ImGui::SameLine();
+    if (ImGui::Button(u8"\u590d\u5236##repo", ImVec2(-1, 0))) {
+      ImGui::SetClipboardText("https://github.com/Sasye/EIEM");
+    }
+
+    ImGui::Spacing();
+    ImGui::Spacing();
+
+    ImGui::TextColored(ImVec4(0.90f, 0.75f, 0.20f, 1.0f), u8"\u4ea4\u6d41\u7fa4");
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(35, 38, 48, 255));
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 218, 0, 255));
+    static char s_qqGroupBuf[] = "1036919766";
+    ImGui::SetNextItemWidth(-60);
+    ImGui::InputText("##qqgroup", s_qqGroupBuf, sizeof(s_qqGroupBuf), ImGuiInputTextFlags_ReadOnly);
+    ImGui::PopStyleColor(2);
+    ImGui::SameLine();
+    if (ImGui::Button(u8"\u590d\u5236##group", ImVec2(-1, 0))) {
+      ImGui::SetClipboardText("1036919766");
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::TextDisabled(u8"\u5f00\u6e90\u8bb8\u53ef: AGPL-3.0 with an additional User Agreement.");
+    ImGui::TextDisabled(u8"\u4f5c\u8005: Sasye");
 
     ImGui::EndTabItem();
   }
@@ -1210,11 +1321,12 @@ static DWORD WINAPI GuiThread(LPVOID) {
     il2cpp_thread_attach(domain);
 
   while (g_guiRunning && !g_gameHwnd) {
-    Sleep(500);
+    g_gameHwnd = FindGameWindow();
+    if (!g_gameHwnd) Sleep(200);
   }
   if (!g_guiRunning || !g_gameHwnd) return 0;
 
-  Log("[GUI] Game window found: %p", g_gameHwnd);
+  Log("[GUI] Game window found: %p (pid=%lu)", g_gameHwnd, GetCurrentProcessId());
 
   WNDCLASSEXW wc = {};
   wc.cbSize = sizeof(wc);
@@ -1233,7 +1345,7 @@ static DWORD WINAPI GuiThread(LPVOID) {
   int posY = gr.top + 40;
 
   g_guiHwnd = CreateWindowExW(
-      WS_EX_TOOLWINDOW, wc.lpszClassName, L"EIEM",
+      WS_EX_TOPMOST | WS_EX_TOOLWINDOW, wc.lpszClassName, L"EIEM",
       WS_POPUP, posX, posY, panelW, panelH,
       nullptr, nullptr, wc.hInstance, nullptr);
 
@@ -1406,35 +1518,58 @@ static DWORD WINAPI GuiThread(LPVOID) {
       break;
     }
 
+    static bool s_panelShown = false;
+
     if (!g_guiVisible) {
-      Sleep(100); 
+      if (s_panelShown) {
+        SetWindowPos(g_guiHwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        ShowWindow(g_guiHwnd, SW_HIDE);
+        s_panelShown = false;
+      }
+      Sleep(60);
       continue;
     }
 
-    static bool s_panelShown = false;
+    if (g_gameHwnd && IsIconic(g_gameHwnd)) {
+      if (s_panelShown) {
+        SetWindowPos(g_guiHwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        ShowWindow(g_guiHwnd, SW_HIDE);
+        s_panelShown = false;
+      }
+      Sleep(100);
+      continue;
+    }
+
     HWND fg = GetForegroundWindow();
-    bool gameInFocus = false;
-    if (fg) {
-      if (fg == g_gameHwnd || fg == g_guiHwnd) {
-        gameInFocus = true;
-      } else {
-        DWORD fgPid = 0, gamePid = 0;
-        GetWindowThreadProcessId(fg, &fgPid);
-        if (g_gameHwnd) GetWindowThreadProcessId(g_gameHwnd, &gamePid);
-        if (fgPid != 0 && fgPid == gamePid) gameInFocus = true;
+    bool shouldShow = true;
+    if (fg && fg != g_gameHwnd && fg != g_guiHwnd) {
+      DWORD fgPid = 0, gamePid = 0;
+      GetWindowThreadProcessId(fg, &fgPid);
+      if (g_gameHwnd) GetWindowThreadProcessId(g_gameHwnd, &gamePid);
+      if (fgPid != 0 && gamePid != 0 && fgPid != gamePid) {
+        shouldShow = false; 
       }
     }
 
-    if (gameInFocus && !s_panelShown) {
-      SetWindowPos(g_guiHwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-      ShowWindow(g_guiHwnd, SW_SHOWNOACTIVATE);
-      s_panelShown = true;
-    } else if (!gameInFocus && s_panelShown) {
-      SetWindowPos(g_guiHwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
-                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-      ShowWindow(g_guiHwnd, SW_HIDE);
-      s_panelShown = false;
+    if (shouldShow) {
+      if (!s_panelShown) {
+        SetWindowPos(g_guiHwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        ShowWindow(g_guiHwnd, SW_SHOWNOACTIVATE);
+        s_panelShown = true;
+      } else if (fg == g_gameHwnd) {
+        SetWindowPos(g_guiHwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+      }
+    } else {
+      if (s_panelShown) {
+        SetWindowPos(g_guiHwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        ShowWindow(g_guiHwnd, SW_HIDE);
+        s_panelShown = false;
+      }
     }
 
     if (!s_panelShown) {

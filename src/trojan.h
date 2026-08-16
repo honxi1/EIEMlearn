@@ -713,6 +713,279 @@ static float s_mmdFirstBodyPos[3] = {};
 static float s_mmdFirstBodyRot[4] = {};
 static bool s_firstFrame = true;
 
+static float s_initialRootPos[3] = {};
+static bool s_initialRootCaptured = false;
+static float g_initialRootQuat[4] = {0, 0, 0, 1};  
+static Vec3 s_firstCenterDisp = {0, 0, 0}; 
+
+
+static float s_firstLeftFootIK[3] = {};
+static float s_firstRightFootIK[3] = {};
+static Quat s_firstLeftFootIKRot = {0, 0, 0, 1};
+static Quat s_firstRightFootIKRot = {0, 0, 0, 1};
+static bool s_footIKFirstCaptured = false;
+static float s_gameFootInitL[3] = {}, s_gameFootInitR[3] = {};
+static bool s_footIKCalibrated = false;
+static float g_ikCenterWorldDelta[3] = {};  
+static Vec3 s_curVmdCenter = {0, 0, 0};  
+static bool s_vmdCenterSampled = false;   
+static float s_bodyMotDelta[3] = {};      
+
+struct FootIKSample {
+  Vec3 leftPos, rightPos;
+  Quat leftRot, rightRot;
+  Vec3 centerPos;  
+  bool valid;
+};
+
+static FootIKSample SampleFootIK(float timeSec) {
+  FootIKSample result = {};
+  result.valid = false;
+  VmdFile *vmd = g_footIkVmd ? g_footIkVmd : g_vmd;
+  if (!vmd || !vmd->loaded) return result;
+
+  float frameF = timeSec * 30.0f;
+
+  auto itL = vmd->boneTimelines.find(
+      "\xe5\xb7\xa6\xe8\xb6\xb3\xef\xbc\xa9\xef\xbc\xab");
+  auto itR = vmd->boneTimelines.find(
+      "\xe5\x8f\xb3\xe8\xb6\xb3\xef\xbc\xa9\xef\xbc\xab");
+
+  if (itL == vmd->boneTimelines.end() ||
+      itR == vmd->boneTimelines.end())
+    return result;
+
+  InterpResult irL = InterpolateBone(itL->second.keys, frameF, true);
+  InterpResult irR = InterpolateBone(itR->second.keys, frameF, true);
+
+  result.leftPos = irL.position;
+  result.leftRot = irL.rotation;
+  result.rightPos = irR.position;
+  result.rightRot = irR.rotation;
+
+  result.centerPos = {0, 0, 0};
+  auto itC = vmd->boneTimelines.find(
+      "\xe3\x82\xbb\xe3\x83\xb3\xe3\x82\xbf\xe3\x83\xbc"); 
+  if (itC != vmd->boneTimelines.end()) {
+    InterpResult irC = InterpolateBone(itC->second.keys, frameF, true);
+    result.centerPos = irC.position;
+  }
+  auto itG = vmd->boneTimelines.find(
+      "\xe3\x82\xb0\xe3\x83\xab\xe3\x83\xbc\xe3\x83\x96"); 
+  if (itG != vmd->boneTimelines.end()) {
+    InterpResult irG = InterpolateBone(itG->second.keys, frameF, true);
+    result.centerPos.x += irG.position.x;
+    result.centerPos.y += irG.position.y;
+    result.centerPos.z += irG.position.z;
+  }
+
+  result.valid = true;
+  return result;
+}
+
+static float g_ikDeltaLf[3] = {};
+static float g_ikDeltaRf[3] = {};
+
+static void *g_activeLfSolver = nullptr;
+static void *g_activeRfSolver = nullptr;
+static bool g_mmdIKActive = false;  
+
+static float s_baseGroundY = 0.0f;
+static bool s_baseGroundCaptured = false;
+static float s_smoothedGroundDelta = 0.0f;
+static float s_initialFootPosL[3] = {};
+static float s_initialFootPosR[3] = {};
+static bool s_footPosBaseCaptured = false;
+static float s_lfBaseGround = 0.0f;
+static bool s_lfBaseCaptured = false;
+static float s_rfBaseGround = 0.0f;
+static bool s_rfBaseCaptured = false;
+static float s_curFootGroundDeltaL = 0.0f;
+static float s_curFootGroundDeltaR = 0.0f;
+static float s_curFootTargetL[3] = {};
+static float s_curFootTargetR[3] = {};
+
+static void *s_origMoveTick = nullptr;
+static void *s_cachedMovementComp = nullptr;
+static void *s_cachedEntity = nullptr;
+
+typedef void (__fastcall *FindFloorNative_t)(
+  void *self, float *position, void *outResult, float stepDown, void *methodInfo);
+static FindFloorNative_t s_findFloorNativeFn = nullptr;
+
+static void __fastcall Hooked_MovementComponent_Tick(void *self, float deltaTime, void *methodInfo) {
+  typedef void (__fastcall *fn)(void *, float, void *);
+  
+  if (!s_cachedMovementComp && g_cachedAnimator) {
+    __try {
+      void *entity = *(void **)((char *)self + g_offBaseCompEntity);
+      if (entity && (uintptr_t)entity > 0x10000) {
+        void *klass = il2cpp_object_get_class(entity);
+        if (klass) {
+          const char *cn = il2cpp_class_get_name(klass);
+          if (cn && strcmp(cn, "Entity") == 0) {
+            void *getSkMorph = nullptr;
+            void *miter = nullptr;
+            while (void *m = il2cpp_class_get_methods(klass, &miter)) {
+              const char *mn = il2cpp_method_get_name(m);
+              if (mn && strcmp(mn, "get_skMorphCom") == 0) {
+                getSkMorph = (void *)m;
+                break;
+              }
+            }
+            if (getSkMorph) {
+              void *exc = nullptr;
+              void *skMorphComp = il2cpp_runtime_invoke(getSkMorph, entity, nullptr, &exc);
+              if (skMorphComp && !exc) {
+                void *core = *(void **)((char *)skMorphComp + 0x150);
+                if (core == g_confirmedSMC) {
+                  s_cachedMovementComp = self;
+                  s_cachedEntity = entity;
+                  Log("[GF2-HOOK] MATCH! MovementComponent=%p Entity=%p", self, entity);
+                }
+              }
+            }
+          }
+        }
+      }
+    } __except(1) {}
+  }
+  
+  if (s_origMoveTick)
+    ((fn)s_origMoveTick)(self, deltaTime, methodInfo);
+}
+
+static void *s_origLateUpdate = nullptr;
+static void *s_origUpdateSolver = nullptr;
+static void __fastcall Hooked_IK_UpdateSolver(void *self, void *methodInfo);
+
+static void __fastcall Hooked_SolverManager_LateUpdate(void *self, void *methodInfo) {
+  typedef void (__fastcall *fn)(void *, void *);
+  if (s_origLateUpdate) {
+    ((fn)s_origLateUpdate)(self, methodInfo);
+  }
+}
+
+static void *s_origOnUpdate = nullptr;
+
+static void __fastcall Hooked_OnUpdate(void *self, void *methodInfo) {
+  typedef void (__fastcall *fn)(void *, void *);
+
+  __try {
+    if (g_mmdIKActive) {
+      if (self == g_activeLfSolver && g_activeLfSolver) {
+        *(float *)((char *)self + 0x14) = s_curFootTargetL[0];
+        *(float *)((char *)self + 0x18) = s_curFootTargetL[1];
+        *(float *)((char *)self + 0x1c) = s_curFootTargetL[2];
+        *(float *)((char *)self + 0x20) = 1.0f;
+      }
+      else if (self == g_activeRfSolver && g_activeRfSolver) {
+        *(float *)((char *)self + 0x14) = s_curFootTargetR[0];
+        *(float *)((char *)self + 0x18) = s_curFootTargetR[1];
+        *(float *)((char *)self + 0x1c) = s_curFootTargetR[2];
+        *(float *)((char *)self + 0x20) = 1.0f;
+      }
+    }
+  } __except (EXCEPTION_EXECUTE_HANDLER) {}
+
+  if (s_origOnUpdate) {
+    ((fn)s_origOnUpdate)(self, methodInfo);
+  }
+}
+
+static void __fastcall Hooked_IK_UpdateSolver(void *self, void *methodInfo) {
+  typedef void (__fastcall *fn)(void *, void *);
+  if (s_origUpdateSolver) {
+    ((fn)s_origUpdateSolver)(self, methodInfo);
+  }
+}
+
+static void PreSampleVmdCenter() {
+  s_vmdCenterSampled = false;
+  VmdFile *vmd = g_footIkVmd ? g_footIkVmd : g_vmd;
+  if (g_musclePlayer && vmd && vmd->loaded) {
+    float frameF = g_musclePlayer->currentTime * 30.0f;
+    Vec3 center = {0, 0, 0};
+    auto itC = vmd->boneTimelines.find(
+        "\xe3\x82\xbb\xe3\x83\xb3\xe3\x82\xbf\xe3\x83\xbc"); 
+    if (itC != vmd->boneTimelines.end()) {
+      InterpResult irC = InterpolateBone(itC->second.keys, frameF, true);
+      center = irC.position;
+    }
+    auto itG = vmd->boneTimelines.find(
+        "\xe3\x82\xb0\xe3\x83\xab\xe3\x83\xbc\xe3\x83\x96"); 
+    if (itG != vmd->boneTimelines.end()) {
+      InterpResult irG = InterpolateBone(itG->second.keys, frameF, true);
+      center.x += irG.position.x;
+      center.y += irG.position.y;
+      center.z += irG.position.z;
+    }
+    s_curVmdCenter = center;
+    s_vmdCenterSampled = true;
+  }
+}
+
+static void ConfigureIKComponents(bool footIKEnabled) {
+  if (footIKEnabled) {
+    for (int bi = 0; bi < s_bipedIKCount; bi++) {
+      if (s_bipedIK[bi]) {
+        if (g_animator_set_enabled) {
+          int trueVal = 1; void *params[] = {&trueVal};
+          __try { Invoke(g_animator_set_enabled, s_bipedIK[bi], params); } __except(1) {}
+        }
+        *(bool *)((char *)s_bipedIK[bi] + 0x18) = false; 
+        __try {
+          void *solvers = *(void **)((char *)s_bipedIK[bi] + 0x40);
+          if (solvers) {
+            void *lh = *(void **)((char *)solvers + 0x20);
+            void *rh = *(void **)((char *)solvers + 0x28);
+            void *sp = *(void **)((char *)solvers + 0x30);
+            void *la = *(void **)((char *)solvers + 0x38);
+            void *aim = *(void **)((char *)solvers + 0x40);
+            if (lh) *(float *)((char *)lh + 0x20) = 0.0f;
+            if (rh) *(float *)((char *)rh + 0x20) = 0.0f;
+            if (sp) *(float *)((char *)sp + 0x20) = 0.0f;
+            if (la) *(float *)((char *)la + 0x20) = 0.0f;
+            if (aim) *(float *)((char *)aim + 0x20) = 0.0f;
+          }
+        } __except (1) {}
+      }
+    }
+    for (int gi = 0; gi < s_grounderIKCount; gi++) {
+      if (s_grounderIK[gi]) {
+        if (g_animator_set_enabled) {
+          int trueVal = 1; void *params[] = {&trueVal};
+          __try { Invoke(g_animator_set_enabled, s_grounderIK[gi], params); } __except(1) {}
+        }
+        __try {
+          *(float *)((char *)s_grounderIK[gi] + 0x18) = 0.0f;
+          *(float *)((char *)s_grounderIK[gi] + 0x1c) = 0.0f;
+          *(float *)((char *)s_grounderIK[gi] + 0x20) = 0.0f;
+        } __except (1) {}
+      }
+    }
+    Log("[IK-CONFIG] Configured for Native IK Mode (BipedIK enabled, Grounder weight=0)");
+  } else {
+    for (int bi = 0; bi < s_bipedIKCount; bi++) {
+      if (s_bipedIK[bi] && g_animator_set_enabled) {
+        int falseVal = 0; void *params[] = {&falseVal};
+        __try {
+          Invoke(g_animator_set_enabled, s_bipedIK[bi], params);
+        } __except(1) {}
+      }
+    }
+    for (int gi = 0; gi < s_grounderIKCount; gi++) {
+      if (s_grounderIK[gi] && g_animator_set_enabled) {
+        int falseVal = 0; void *params[] = {&falseVal};
+        __try {
+          Invoke(g_animator_set_enabled, s_grounderIK[gi], params);
+        } __except(1) {}
+      }
+    }
+    Log("[IK-CONFIG] Configured for Pure Muscle Mode (BipedIK & Grounder disabled)");
+  }
+}
+
 static void ApplyMmdPoseOnMainThread() {
   if (!s_poseReady || !s_musclePtr)
     return;
@@ -722,6 +995,12 @@ static void ApplyMmdPoseOnMainThread() {
   void *managedObj = il2cpp_gchandle_get_target(g_poseHandleGC);
   if (!managedObj)
     return;
+
+  static bool s_lastConfiguredFootIKMode = true;
+  if (s_ikDisabled && s_lastConfiguredFootIKMode != g_footIKEnabled) {
+    s_lastConfiguredFootIKMode = g_footIKEnabled;
+    ConfigureIKComponents(g_footIKEnabled);
+  }
 
   SafeSetAnimatorEnabled(false);
 
@@ -762,14 +1041,64 @@ static void ApplyMmdPoseOnMainThread() {
 
 
   if (s_firstFrame) {
+    s_baseGroundCaptured = false;
+    s_baseGroundY = 0.0f;
+    s_lfBaseCaptured = false;
+    s_lfBaseGround = 0.0f;
+    s_rfBaseCaptured = false;
+    s_rfBaseGround = 0.0f;
+    s_footPosBaseCaptured = false;
+    g_groundDeltaY = 0.0f;
+
     memcpy(s_mmdFirstMuscles, (void *)g_mmdMuscles, 95 * sizeof(float));
     s_mmdFirstBodyPos[0] = g_mmdBodyPos[0];
     s_mmdFirstBodyPos[1] = g_mmdBodyPos[1];
     s_mmdFirstBodyPos[2] = g_mmdBodyPos[2];
+    Log("[VMD-INIT] firstBodyPos=(%.3f,%.3f,%.3f) firstFootIK_L=(%.3f,%.3f,%.3f)"
+        " firstFootIK_R=(%.3f,%.3f,%.3f)",
+        s_mmdFirstBodyPos[0], s_mmdFirstBodyPos[1], s_mmdFirstBodyPos[2],
+        s_firstLeftFootIK[0], s_firstLeftFootIK[1], s_firstLeftFootIK[2],
+        s_firstRightFootIK[0], s_firstRightFootIK[1], s_firstRightFootIK[2]);
     s_mmdFirstBodyRot[0] = g_mmdBodyRot[0];
     s_mmdFirstBodyRot[1] = g_mmdBodyRot[1];
     s_mmdFirstBodyRot[2] = g_mmdBodyRot[2];
     s_mmdFirstBodyRot[3] = g_mmdBodyRot[3];
+    if (!s_initialRootCaptured) {
+      void *rootT = SafeGetComponentTransform(g_cachedAnimator);
+      if (rootT && g_camGetPos) {
+        g_camGetPos(rootT, s_initialRootPos);
+        s_initialRootCaptured = true;
+        Log("[ROOT-MOVE] Initial root pos: (%.2f, %.2f, %.2f)",
+            s_initialRootPos[0], s_initialRootPos[1], s_initialRootPos[2]);
+        if (g_camGetRot) {
+          g_camGetRot(rootT, g_initialRootQuat);
+          float yawDeg = atan2f(2.0f * (g_initialRootQuat[0]*g_initialRootQuat[2] + g_initialRootQuat[1]*g_initialRootQuat[3]),
+                                1.0f - 2.0f * (g_initialRootQuat[0]*g_initialRootQuat[0] + g_initialRootQuat[2]*g_initialRootQuat[2])) * 57.2958f;
+          Log("[ROOT-MOVE] Initial root quat: (%.4f,%.4f,%.4f,%.4f) yaw=%.1f deg",
+              g_initialRootQuat[0], g_initialRootQuat[1], g_initialRootQuat[2], g_initialRootQuat[3], yawDeg);
+        }
+      }
+    }
+    if (!s_footIKFirstCaptured && g_musclePlayer) {
+      FootIKSample ik0 = SampleFootIK(g_musclePlayer->currentTime);
+      if (ik0.valid) {
+        s_firstLeftFootIK[0] = ik0.leftPos.x;
+        s_firstLeftFootIK[1] = ik0.leftPos.y;
+        s_firstLeftFootIK[2] = ik0.leftPos.z;
+        s_firstRightFootIK[0] = ik0.rightPos.x;
+        s_firstRightFootIK[1] = ik0.rightPos.y;
+        s_firstRightFootIK[2] = ik0.rightPos.z;
+        s_firstLeftFootIKRot = ik0.leftRot;
+        s_firstRightFootIKRot = ik0.rightRot;
+        s_firstCenterDisp = ik0.centerPos;
+        s_footIKFirstCaptured = true;
+        Log("[FOOT-IK] First frame: L=(%.3f,%.3f,%.3f) R=(%.3f,%.3f,%.3f)"
+            " center=(%.3f,%.3f,%.3f)",
+            ik0.leftPos.x, ik0.leftPos.y, ik0.leftPos.z,
+            ik0.rightPos.x, ik0.rightPos.y, ik0.rightPos.z,
+            ik0.centerPos.x, ik0.centerPos.y, ik0.centerPos.z);
+      }
+    }
     Log("[REMAP] 95—01 remapping active. First frame captured.");
     Log("[REMAP] MMD arm39→game%d arm48→game%d "
         "fore42→game%d",
@@ -811,6 +1140,11 @@ static void ApplyMmdPoseOnMainThread() {
     if (stdIdx >= 19 && stdIdx <= 20)
       continue;
 
+    if (g_footIKEnabled && stdIdx >= 21 && stdIdx <= 36) {
+      s_musclePtr[gameIdx] = s_savedIdleMuscles[gameIdx];
+      continue;
+    }
+
     switch (stdIdx) {
     case 9:
       mmdCur += NECK_NOD_OFFSET;
@@ -844,12 +1178,97 @@ static void ApplyMmdPoseOnMainThread() {
     s_musclePtr[gameIdx] = mmdCur;
   }
 
-  float motDx = (g_mmdBodyPos[0] - s_mmdFirstBodyPos[0]) * g_motionScale;
-  float motDy = (g_mmdBodyPos[1] - s_mmdFirstBodyPos[1]) * g_motionScale;
-  float motDz = (g_mmdBodyPos[2] - s_mmdFirstBodyPos[2]) * g_motionScale;
-  s_cachedPose.bodyPosX = g_restBodyPos[0] + motDx + g_posOffsetX;
-  s_cachedPose.bodyPosY = g_restBodyPos[1] + motDy + g_posOffsetY;
-  s_cachedPose.bodyPosZ = g_restBodyPos[2] + motDz + g_posOffsetZ;
+  if (g_musclePlayer) {
+    FootIKSample ikSample = SampleFootIK(g_musclePlayer->currentTime);
+    if (ikSample.valid) {
+      s_curVmdCenter = ikSample.centerPos;
+      s_vmdCenterSampled = true;
+
+      if (s_footIKFirstCaptured && s_initialRootCaptured) {
+        const float IK_SCALE = 0.08f * g_motionScale;
+        float qx = g_initialRootQuat[0], qy = g_initialRootQuat[1];
+        float qz = g_initialRootQuat[2], qw = g_initialRootQuat[3];
+
+        float vxL = -(ikSample.leftPos.x - s_firstLeftFootIK[0]) * IK_SCALE;
+        float vyL =  (ikSample.leftPos.y - s_firstLeftFootIK[1]) * IK_SCALE;
+        float vzL = -(ikSample.leftPos.z - s_firstLeftFootIK[2]) * IK_SCALE;
+        float txL = 2.0f * (qy * vzL);
+        float tyL = 2.0f * (qz * vxL - qx * vzL);
+        float tzL = 2.0f * (-qy * vxL);
+        g_ikDeltaLf[0] = vxL + qw * txL + (qy * tzL);
+        g_ikDeltaLf[1] = vyL;
+        g_ikDeltaLf[2] = vzL + qw * tzL + (-qy * txL);
+
+        float vxR = -(ikSample.rightPos.x - s_firstRightFootIK[0]) * IK_SCALE;
+        float vyR =  (ikSample.rightPos.y - s_firstRightFootIK[1]) * IK_SCALE;
+        float vzR = -(ikSample.rightPos.z - s_firstRightFootIK[2]) * IK_SCALE;
+        float txR = 2.0f * (qy * vzR);
+        float tyR = 2.0f * (qz * vxR - qx * vzR);
+        float tzR = 2.0f * (-qy * vxR);
+        g_ikDeltaRf[0] = vxR + qw * txR + (qy * tzR);
+        g_ikDeltaRf[1] = vyR;
+        g_ikDeltaRf[2] = vzR + qw * tzR + (-qy * txR);
+      }
+    }
+  }
+
+  float motDx = 0, motDy = 0, motDz = 0;
+  if (s_footIKFirstCaptured && s_vmdCenterSampled) {
+    float cdx = s_curVmdCenter.x - s_firstCenterDisp.x;
+    float cdy = s_curVmdCenter.y - s_firstCenterDisp.y;
+    float cdz = s_curVmdCenter.z - s_firstCenterDisp.z;
+    motDx = -cdx * 0.08f * g_motionScale;
+    motDy =  cdy * 0.08f * g_motionScale;
+    motDz = -cdz * 0.08f * g_motionScale;
+  } else {
+    motDx = (g_mmdBodyPos[0] - s_mmdFirstBodyPos[0]) * g_motionScale;
+    motDy = (g_mmdBodyPos[1] - s_mmdFirstBodyPos[1]) * g_motionScale;
+    motDz = (g_mmdBodyPos[2] - s_mmdFirstBodyPos[2]) * g_motionScale;
+  }
+  s_bodyMotDelta[0] = motDx;
+  s_bodyMotDelta[1] = motDy;
+  s_bodyMotDelta[2] = motDz;
+
+  float worldDx = 0.0f, worldDz = 0.0f;
+  if (s_initialRootCaptured) {
+    float qx = g_initialRootQuat[0], qy = g_initialRootQuat[1];
+    float qz = g_initialRootQuat[2], qw = g_initialRootQuat[3];
+    float tx = 2.0f * (qy * motDz);
+    float ty = 2.0f * (qz * motDx - qx * motDz);
+    float tz = 2.0f * (-qy * motDx);
+    worldDx = motDx + qw * tx + (qy * tz);
+    worldDz = motDz + qw * tz + (-qy * tx);
+  }
+
+  if (g_footIKEnabled) {
+    if (g_origSetPos && s_initialRootCaptured && g_cachedAnimator) {
+      void *animTransform = Invoke(g_component_get_transform, g_cachedAnimator);
+      if (animTransform) {
+        float newRootPos[3] = {
+          s_initialRootPos[0] + worldDx,
+          s_initialRootPos[1] + g_groundDeltaY,
+          s_initialRootPos[2] + worldDz
+        };
+        g_origSetPos(animTransform, newRootPos);
+      }
+    }
+    s_cachedPose.bodyPosX = g_restBodyPos[0] + g_posOffsetX;
+    s_cachedPose.bodyPosY = g_restBodyPos[1] + motDy + g_posOffsetY;
+    s_cachedPose.bodyPosZ = g_restBodyPos[2] + g_posOffsetZ;
+  } else {
+    if (g_origSetPos && s_initialRootCaptured && g_cachedAnimator) {
+      void *animTransform = Invoke(g_component_get_transform, g_cachedAnimator);
+      if (animTransform) {
+        g_origSetPos(animTransform, s_initialRootPos);
+      }
+    }
+    float motDx_m = (g_mmdBodyPos[0] - s_mmdFirstBodyPos[0]) * g_motionScale;
+    float motDy_m = (g_mmdBodyPos[1] - s_mmdFirstBodyPos[1]) * g_motionScale;
+    float motDz_m = (g_mmdBodyPos[2] - s_mmdFirstBodyPos[2]) * g_motionScale;
+    s_cachedPose.bodyPosX = g_restBodyPos[0] + motDx_m + g_posOffsetX;
+    s_cachedPose.bodyPosY = g_restBodyPos[1] + motDy_m + g_posOffsetY;
+    s_cachedPose.bodyPosZ = g_restBodyPos[2] + motDz_m + g_posOffsetZ;
+  }
 
   s_cachedPose.bodyRotX = g_mmdBodyRot[0];
   s_cachedPose.bodyRotY = g_mmdBodyRot[1];
@@ -886,6 +1305,217 @@ static void ApplyMmdPoseOnMainThread() {
                         &setExc);
   *g_slotAddr = g_slotOrigGet;
 
+
+  if (g_trojanActive && g_cachedAnimator) {
+    void *leftFootT = SafeGetBoneTransform(5);   
+    void *rightFootT = SafeGetBoneTransform(6);   
+    Vec3 curLfPos = {}, curRfPos = {};
+    bool haveFootBones = false;
+    if (leftFootT && rightFootT &&
+        ReadWorldPosition(leftFootT, curLfPos) &&
+        ReadWorldPosition(rightFootT, curRfPos)) {
+      haveFootBones = true;
+    }
+
+    if (haveFootBones && !s_footPosBaseCaptured) {
+      s_footPosBaseCaptured = true;
+      s_initialFootPosL[0] = curLfPos.x;
+      s_initialFootPosL[1] = curLfPos.y;
+      s_initialFootPosL[2] = curLfPos.z;
+      s_initialFootPosR[0] = curRfPos.x;
+      s_initialFootPosR[1] = curRfPos.y;
+      s_initialFootPosR[2] = curRfPos.z;
+      s_gameFootInitL[0] = curLfPos.x;
+      s_gameFootInitL[1] = curLfPos.y;
+      s_gameFootInitL[2] = curLfPos.z;
+      s_gameFootInitR[0] = curRfPos.x;
+      s_gameFootInitR[1] = curRfPos.y;
+      s_gameFootInitR[2] = curRfPos.z;
+      s_footIKCalibrated = true;
+    }
+
+    float footX_L = s_gameFootInitL[0] + g_ikDeltaLf[0];
+    float footZ_L = s_gameFootInitL[2] + g_ikDeltaLf[2];
+    float footX_R = s_gameFootInitR[0] + g_ikDeltaRf[0];
+    float footZ_R = s_gameFootInitR[2] + g_ikDeltaRf[2];
+
+    if (g_findFloorMethod && s_cachedMovementComp &&
+        g_camGetPos && g_camGetRot && g_component_get_transform) {
+      if (!s_findFloorNativeFn) {
+        s_findFloorNativeFn = (FindFloorNative_t)((MInfo *)g_findFloorMethod)->mp;
+        Log("[GF2] FindFloor native ptr: %p", s_findFloorNativeFn);
+      }
+
+      if (s_findFloorNativeFn) {
+        __try {
+          void *animTransform = Invoke(g_component_get_transform, g_cachedAnimator);
+          if (animTransform) {
+            float rootPos[3], rootRot[4];
+            g_camGetPos(animTransform, rootPos);
+            g_camGetRot(animTransform, rootRot);
+
+            float bx = s_cachedPose.bodyPosX;
+            float by = s_cachedPose.bodyPosY;
+            float bz = s_cachedPose.bodyPosZ;
+            float qx = rootRot[0], qy = rootRot[1], qz = rootRot[2], qw = rootRot[3];
+            float tx = 2.0f * (qy*bz - qz*by);
+            float ty = 2.0f * (qz*bx - qx*bz);
+            float tz = 2.0f * (qx*by - qy*bx);
+            float wBx = bx + qw*tx + (qy*tz - qz*ty);
+            float wBy = by + qw*ty + (qz*tx - qx*tz);
+            float wBz = bz + qw*tz + (qx*ty - qy*tx);
+
+            float hipsX = rootPos[0] + wBx;
+            float hipsY = rootPos[1] + wBy;
+            float hipsZ = rootPos[2] + wBz;
+
+            bool hitL = false;
+            float gndY_L = 0.0f;
+            if (s_footIKCalibrated) {
+              float qposL[3] = {footX_L, hipsY + 2.0f, footZ_L};
+              alignas(16) char ffrL[128] = {};
+              s_findFloorNativeFn(s_cachedMovementComp, qposL, ffrL, 20.0f, g_findFloorMethod);
+              if (*(bool *)(ffrL + 0x00)) {
+                gndY_L = *(float *)(ffrL + 0x10 + 0x04);
+                if (!s_lfBaseCaptured) {
+                  s_lfBaseCaptured = true;
+                  s_lfBaseGround = gndY_L;
+                }
+                s_curFootGroundDeltaL = gndY_L - s_lfBaseGround;
+                hitL = true;
+              }
+            }
+
+            bool hitR = false;
+            float gndY_R = 0.0f;
+            if (s_footIKCalibrated) {
+              float qposR[3] = {footX_R, hipsY + 2.0f, footZ_R};
+              alignas(16) char ffrR[128] = {};
+              s_findFloorNativeFn(s_cachedMovementComp, qposR, ffrR, 20.0f, g_findFloorMethod);
+              if (*(bool *)(ffrR + 0x00)) {
+                gndY_R = *(float *)(ffrR + 0x10 + 0x04);
+                if (!s_rfBaseCaptured) {
+                  s_rfBaseCaptured = true;
+                  s_rfBaseGround = gndY_R;
+                }
+                s_curFootGroundDeltaR = gndY_R - s_rfBaseGround;
+                hitR = true;
+              }
+            }
+
+            bool hitHips = false;
+            float dHips = 0.0f;
+            {
+              float queryPos[3] = {hipsX, hipsY + 2.0f, hipsZ};
+              alignas(16) char floorResult[128] = {};
+              s_findFloorNativeFn(s_cachedMovementComp, queryPos, floorResult, 20.0f, g_findFloorMethod);
+              if (*(bool *)(floorResult + 0x00)) {
+                float groundY = *(float *)(floorResult + 0x10 + 0x04);
+                if (!s_baseGroundCaptured) {
+                  s_baseGroundCaptured = true;
+                  s_baseGroundY = groundY;
+                  Log("[GF2] Base groundY=%.3f hips=(%.2f,%.2f,%.2f)",
+                      s_baseGroundY, hipsX, hipsY, hipsZ);
+                }
+                dHips = groundY - s_baseGroundY;
+                hitHips = true;
+              }
+            }
+
+            if (!hitL) s_curFootGroundDeltaL = hitHips ? dHips : 0.0f;
+            if (!hitR) s_curFootGroundDeltaR = hitHips ? dHips : 0.0f;
+
+            float footLiftL = g_ikDeltaLf[1];
+            float footLiftR = g_ikDeltaRf[1];
+            if (footLiftL < 0.0f) footLiftL = 0.0f;
+            if (footLiftR < 0.0f) footLiftR = 0.0f;
+
+            float wL = 1.0f - (footLiftL / 0.12f);
+            if (wL < 0.0f) wL = 0.0f;
+            if (wL > 1.0f) wL = 1.0f;
+
+            float wR = 1.0f - (footLiftR / 0.12f);
+            if (wR < 0.0f) wR = 0.0f;
+            if (wR > 1.0f) wR = 1.0f;
+
+            float targetDelta = dHips;
+            if (hitL && hitR && (wL + wR > 0.01f)) {
+              targetDelta = (wL * s_curFootGroundDeltaL + wR * s_curFootGroundDeltaR) / (wL + wR);
+            } else if (hitL) {
+              targetDelta = s_curFootGroundDeltaL;
+            } else if (hitR) {
+              targetDelta = s_curFootGroundDeltaR;
+            } else if (hitHips) {
+              targetDelta = dHips;
+            }
+
+            if (!s_initialRootCaptured) {
+              s_smoothedGroundDelta = targetDelta;
+            } else {
+              s_smoothedGroundDelta += (targetDelta - s_smoothedGroundDelta) * 0.25f;
+            }
+            g_groundDeltaY = s_smoothedGroundDelta;
+
+            if (g_footIKEnabled && s_footIKCalibrated && s_bipedIKCount > 0) {
+              void *bipedIK = s_bipedIK[0];
+              if (bipedIK) {
+                void *solvers = *(void **)((char *)bipedIK + 0x40);
+                if (solvers) {
+                  void *lfSolver = *(void **)((char *)solvers + 0x10);
+                  void *rfSolver = *(void **)((char *)solvers + 0x18);
+
+                  if (lfSolver) {
+                    *(void **)((char *)lfSolver + 0x38) = nullptr;
+                    *(void **)((char *)lfSolver + 0x40) = nullptr;
+                    *(void **)((char *)lfSolver + 0x58) = nullptr;
+                  }
+                  if (rfSolver) {
+                    *(void **)((char *)rfSolver + 0x38) = nullptr;
+                    *(void **)((char *)rfSolver + 0x40) = nullptr;
+                    *(void **)((char *)rfSolver + 0x58) = nullptr;
+                  }
+
+                  *(bool *)((char *)bipedIK + 0x30) = true;   
+                  *(bool *)((char *)bipedIK + 0x32) = false;  
+                  *(void **)((char *)bipedIK + 0x20) = nullptr; 
+
+                  s_curFootTargetL[0] = footX_L;
+                  s_curFootTargetL[1] = s_gameFootInitL[1] + g_ikDeltaLf[1] + s_curFootGroundDeltaL;
+                  s_curFootTargetL[2] = footZ_L;
+
+                  s_curFootTargetR[0] = footX_R;
+                  s_curFootTargetR[1] = s_gameFootInitR[1] + g_ikDeltaRf[1] + s_curFootGroundDeltaR;
+                  s_curFootTargetR[2] = footZ_R;
+
+                  g_activeLfSolver = lfSolver;
+                  g_activeRfSolver = rfSolver;
+                  g_mmdIKActive = true;
+                }
+              }
+            } else {
+              g_mmdIKActive = false;
+              if (g_activeLfSolver)
+                *(float *)((char *)g_activeLfSolver + 0x20) = 0.0f;
+              if (g_activeRfSolver)
+                *(float *)((char *)g_activeRfSolver + 0x20) = 0.0f;
+            }
+
+            static int s_gfLog = 0;
+            if (s_gfLog++ % 60 == 0) {
+              Log("[GF2] f=%d haveBones=%d curLf=(%.2f,%.2f,%.2f) curRf=(%.2f,%.2f,%.2f) targetD=%.3f smoothD=%.3f dL=%.3f dR=%.3f rootY=%.2f",
+                  s_gfLog, (int)haveFootBones, curLfPos.x, curLfPos.y, curLfPos.z, curRfPos.x, curRfPos.y, curRfPos.z,
+                  targetDelta, g_groundDeltaY, s_curFootGroundDeltaL, s_curFootGroundDeltaR, rootPos[1]);
+            }
+          }
+        } __except(1) {
+          static bool s_sehLogged = false;
+          if (!s_sehLogged) { s_sehLogged = true; Log("[GF2] FindFloor native SEH!"); }
+        }
+      }
+    }
+  }
+
+
   if (g_mmdHasArmBones && g_muscleAnim && g_muscleAnim->hasArmBones &&
       g_cachedAnimator) {
 
@@ -901,6 +1531,7 @@ static void ApplyMmdPoseOnMainThread() {
       if (animatorGO) {
         void *rootTransform = SafeGetComponentTransform(g_cachedAnimator);
         if (rootTransform) {
+
           struct WalkEntry {
             void *t;
             int d;
@@ -1076,32 +1707,7 @@ static void ApplyMmdPoseOnMainThread() {
             }
           }
 
-          for (int bi = 0; bi < s_bipedIKCount; bi++) {
-            if (s_bipedIK[bi] && g_animator_set_enabled) {
-              __try {
-                int falseVal = 0;
-                void *params[] = {&falseVal};
-                Invoke(g_animator_set_enabled, s_bipedIK[bi], params);
-                Log("[IK-DISABLE] BipedIK #%d DISABLED!", bi + 1);
-              } __except (EXCEPTION_EXECUTE_HANDLER) {
-                Log("[IK-DISABLE] Failed to disable BipedIK #%d: 0x%08X",
-                    bi + 1, GetExceptionCode());
-              }
-            }
-          }
-
-          for (int gi = 0; gi < s_grounderIKCount; gi++) {
-            if (s_grounderIK[gi] && g_animator_set_enabled) {
-              __try {
-                int falseVal = 0;
-                void *params[] = {&falseVal};
-                Invoke(g_animator_set_enabled, s_grounderIK[gi], params);
-                Log("[IK-DISABLE] GrounderBipedIK #%d DISABLED!", gi + 1);
-              } __except (EXCEPTION_EXECUTE_HANDLER) {
-                Log("[IK-DISABLE] Failed to disable GrounderBipedIK #%d", gi + 1);
-              }
-            }
-          }
+          ConfigureIKComponents(g_footIKEnabled);
 
           for (int fd = 0; fd < s_followDamperCount; fd++) {
             Log("[IK-DISABLE] TransformFollowDamper #%d KEPT ENABLED (decoration)", fd + 1);
@@ -1469,15 +2075,13 @@ static void ApplyMmdPoseOnMainThread() {
         void *hipsT = SafeGetBoneTransform(0); 
         Vec3 hipsNow;
         if (hipsT && ReadWorldPosition(hipsT, hipsNow)) {
-          float dx = hipsNow.x - g_camInitHipsWorldPos.x;
-          float dz = hipsNow.z - g_camInitHipsWorldPos.z;
+          g_charWorldPos.x = hipsNow.x;
+          g_charWorldPos.z = hipsNow.z;
           void *rootT = SafeGetComponentTransform(g_cachedAnimator);
           if (rootT && g_camGetPos) {
             float rootPos[3] = {};
             g_camGetPos(rootT, rootPos);
-            g_charWorldPos.x = rootPos[0] + dx;
             g_charWorldPos.y = rootPos[1];
-            g_charWorldPos.z = rootPos[2] + dz;
           }
         }
       }
@@ -1594,6 +2198,7 @@ static LRESULT CALLBACK MmdWndProc(HWND hwnd, UINT msg, WPARAM wParam,
       InitMmdPoseOnMainThread();
     }
     if (s_poseReady) {
+      PreSampleVmdCenter();
       ApplyMmdPoseOnMainThread();
     }
     g_mmdPendingApply = false;
@@ -1661,6 +2266,26 @@ static LRESULT CALLBACK MmdWndProc(HWND hwnd, UINT msg, WPARAM wParam,
           g_extraMorphs[i].weight = 0;
           g_extraMorphs[i].prevWeight = 0;
         }
+        s_footIKFirstCaptured = false;
+        s_footIKCalibrated = false;
+        g_mmdIKActive = false;
+        g_ikDeltaLf[0] = g_ikDeltaLf[1] = g_ikDeltaLf[2] = 0;
+        g_ikDeltaRf[0] = g_ikDeltaRf[1] = g_ikDeltaRf[2] = 0;
+        if (g_activeLfSolver)
+          *(float *)((char *)g_activeLfSolver + 0x20) = 0.0f; 
+        if (g_activeRfSolver)
+          *(float *)((char *)g_activeRfSolver + 0x20) = 0.0f; 
+        g_activeLfSolver = nullptr;
+        s_baseGroundCaptured = false;
+        s_baseGroundY = 0.0f;
+        s_smoothedGroundDelta = 0.0f;
+        s_footPosBaseCaptured = false;
+        s_lfBaseCaptured = false;
+        s_lfBaseGround = 0.0f;
+        s_rfBaseCaptured = false;
+        s_rfBaseGround = 0.0f;
+        g_groundDeltaY = 0.0f;
+
         RestoreDisabledComponents();
         RestoreSkirtColliders();
         SafeSetAnimatorEnabled(true);
@@ -1669,6 +2294,15 @@ static LRESULT CALLBACK MmdWndProc(HWND hwnd, UINT msg, WPARAM wParam,
         }
         ResetCameraState();
         s_firstFrame = true;
+        if (s_initialRootCaptured && g_camSetPos && g_cachedAnimator) {
+          void *rootT = SafeGetComponentTransform(g_cachedAnimator);
+          if (rootT) {
+            g_camSetPos(rootT, s_initialRootPos);
+            Log("[ROOT-MOVE] Root restored to initial pos: (%.2f, %.2f, %.2f)",
+                s_initialRootPos[0], s_initialRootPos[1], s_initialRootPos[2]);
+          }
+        }
+        s_initialRootCaptured = false;
         if (g_audioPlayer) g_audioPlayer->Stop();
         g_audioIsClock = false;
         g_audioPendingStart = false;
@@ -1753,6 +2387,7 @@ static LRESULT CALLBACK MmdWndProc(HWND hwnd, UINT msg, WPARAM wParam,
       memset(g_fingerTransforms, 0, sizeof(g_fingerTransforms));
       g_mouthWeightsFromMuscle = false;
       g_bsIndicesResolved = false;
+      g_groundDeltaY = 0.0f;
       memset(g_mouthWeights, 0, sizeof(g_mouthWeights));
       RefreshEntityAnimator();
       if (g_cachedAnimator) {
@@ -1765,11 +2400,17 @@ static LRESULT CALLBACK MmdWndProc(HWND hwnd, UINT msg, WPARAM wParam,
   }
   LRESULT r = CallWindowProcW(g_origWndProc, hwnd, msg, wParam, lParam);
 
-  if (g_guiVisible && g_cursorShowAction && g_actionInvokeMethod) {
+  if (g_guiVisible) {
     if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN ||
         msg == WM_MBUTTONDOWN || msg == WM_ACTIVATE ||
         msg == WM_SETFOCUS || msg == WM_KILLFOCUS) {
-      SafeInvokeCursorAction(g_cursorShowAction);
+      if (g_guiHwnd) {
+        SetWindowPos(g_guiHwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+      }
+      if (g_cursorShowAction && g_actionInvokeMethod) {
+        SafeInvokeCursorAction(g_cursorShowAction);
+      }
     }
   }
 
@@ -1854,6 +2495,60 @@ static void MuscleAnimationTick() {
   }
   g_mmdHasMuscles = true;
 
+  if (!g_footIkVmd && !g_footIkResolved) {
+    g_footIkResolved = true;
+
+    if (g_footIkVmdPath[0] != '\0') {
+      VmdFile *v = LoadVmd(g_footIkVmdPath);
+      if (v && v->loaded && !v->boneTimelines.empty()) {
+        g_footIkVmd = v;
+        Log("[FOOT-IK] User Foot IK VMD loaded: %s (%zu bone timelines)",
+            g_footIkVmdPath, v->boneTimelines.size());
+      } else {
+        Log("[FOOT-IK] User Foot IK VMD load failed: %s", g_footIkVmdPath);
+        if (v) FreeVmd(v);
+      }
+    } else {
+      WIN32_FIND_DATAA fd;
+      HANDLE hFind = FindFirstFileA("plugin\\*.vmd", &fd);
+      if (hFind != INVALID_HANDLE_VALUE) {
+        VmdFile *bestVmd = nullptr;
+        char bestName[MAX_PATH] = {};
+        int bestBoneCount = -1;
+        do {
+          if (_stricmp(fd.cFileName, "camera.vmd") == 0) continue;
+
+          char vmdPath[MAX_PATH];
+          snprintf(vmdPath, sizeof(vmdPath), "plugin\\%s", fd.cFileName);
+          VmdFile *candidate = LoadVmd(vmdPath);
+          if (!candidate || !candidate->loaded) {
+            if (candidate) FreeVmd(candidate);
+            continue;
+          }
+          int bc = (int)candidate->boneTimelines.size();
+          bool hasFootIK = (candidate->boneTimelines.find("\xe5\xb7\xa6\xe8\xb6\xb3\xef\xbc\xa9\xef\xbc\xab") != candidate->boneTimelines.end() ||
+                            candidate->boneTimelines.find("\xe3\x82\xbb\xe3\x83\xb3\xe3\x82\xbf\xe3\x83\xbc") != candidate->boneTimelines.end());
+          if (hasFootIK && bc > bestBoneCount) {
+            if (bestVmd) FreeVmd(bestVmd);
+            bestVmd = candidate;
+            bestBoneCount = bc;
+            strncpy(bestName, fd.cFileName, sizeof(bestName) - 1);
+            bestName[sizeof(bestName) - 1] = '\0';
+          } else {
+            FreeVmd(candidate);
+          }
+        } while (FindNextFileA(hFind, &fd));
+        FindClose(hFind);
+
+        if (bestVmd) {
+          g_footIkVmd = bestVmd;
+          Log("[FOOT-IK] Selected %s as Foot IK source: %d bone timelines",
+              bestName, bestBoneCount);
+        }
+      }
+    }
+  }
+
   if (!g_vmd && !g_bsIndicesResolved) {
     g_bsIndicesResolved = true; 
 
@@ -1892,7 +2587,8 @@ static void MuscleAnimationTick() {
             if (bestVmd) FreeVmd(bestVmd);
             bestVmd = candidate;
             bestMorphCount = mc;
-            strncpy(bestName, fd.cFileName, MAX_PATH - 1);
+            strncpy(bestName, fd.cFileName, sizeof(bestName) - 1);
+            bestName[sizeof(bestName) - 1] = '\0';
           } else {
             FreeVmd(candidate);
           }

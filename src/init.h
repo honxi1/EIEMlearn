@@ -138,11 +138,11 @@ static DWORD WINAPI HotkeyThread(LPVOID) {
 
   HWND hwnd = nullptr;
   while (!hwnd) {
-    hwnd = FindWindowA("UnityWndClass", NULL);
-    Sleep(200);
+    hwnd = FindGameWindow();
+    if (!hwnd) Sleep(200);
   }
   g_gameHwnd = hwnd;
-  Log("[OK] Game window found: %p", hwnd);
+  Log("[OK] Game window found: %p (pid=%lu)", hwnd, GetCurrentProcessId());
 
   g_origWndProc =
       (WNDPROC)SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)MmdWndProc);
@@ -152,15 +152,17 @@ static DWORD WINAPI HotkeyThread(LPVOID) {
     Log("[WARN] Failed to subclass game window (err=%lu)", GetLastError());
   }
 
+  LoadEiemConfig();
+
   while (g_guiRunning && IsWindowAlive(hwnd)) {
-    static bool insPressed = false;
-    if (GetAsyncKeyState(VK_INSERT) & 0x8000) {
-      if (!insPressed) {
-        insPressed = true;
+    static bool togglePressed = false;
+    if (g_pluginActive && (GetAsyncKeyState(g_guiToggleVK) & 0x8000)) {
+      if (!togglePressed) {
+        togglePressed = true;
         ToggleGui();
       }
     } else {
-      insPressed = false;
+      togglePressed = false;
     }
 
     AnimationTick();
@@ -719,14 +721,17 @@ static DWORD WINAPI InitThread(LPVOID) {
                 (const char *)((uintptr_t)(h + leaOffset + 7) + nameDisp);
             char nameBuf[256] = {};
             __try {
-              strncpy(nameBuf, nameStr, 255);
+              strncpy(nameBuf, nameStr, sizeof(nameBuf) - 1);
+              nameBuf[sizeof(nameBuf) - 1] = '\0';
             } __except (1) {
-              strcpy(nameBuf, "<unreadable>");
+              strncpy(nameBuf, "<unreadable>", sizeof(nameBuf) - 1);
+              nameBuf[sizeof(nameBuf) - 1] = '\0';
             }
             Log("[SLOT] icall name: \"%s\"", nameBuf);
 
             char setName[256] = {};
-            strncpy(setName, nameBuf, 255);
+            strncpy(setName, nameBuf, sizeof(setName) - 1);
+            setName[sizeof(setName) - 1] = '\0';
             char *getPos = strstr(setName, "Get");
             if (getPos) {
               memcpy(getPos, "Set", 3);
@@ -858,6 +863,76 @@ static DWORD WINAPI InitThread(LPVOID) {
       MH_EnableHook(setLocalRot);
     Log("[CAM] Transform write-hooks: setPos=%p setRot=%p setLPos=%p setLRot=%p",
         g_origSetPos, g_origSetRot, g_origSetLocalPos, g_origSetLocalRot);
+  }
+
+  {
+    uintptr_t gaBase2 = (uintptr_t)GetModuleHandleW(L"GameAssembly.dll");
+    void *lateUpdateAddr = (void *)(gaBase2 + 0x035BD200); 
+    if (MH_CreateHook(lateUpdateAddr, (void *)Hooked_SolverManager_LateUpdate,
+                      &s_origLateUpdate) == MH_OK) {
+      MH_EnableHook(lateUpdateAddr);
+      Log("[IK] SolverManager.LateUpdate hooked at %p (orig=%p)", lateUpdateAddr, s_origLateUpdate);
+    } else {
+      Log("[IK] WARN: Failed to hook SolverManager.LateUpdate at %p", lateUpdateAddr);
+    }
+
+    void *moveCompClass = FindClass("Beyond.Gameplay.Core", "MovementComponent", asms, ac);
+    if (moveCompClass) {
+      void *tickMethod = FindMethod(moveCompClass, "Tick", 1);
+      if (tickMethod) {
+        if (Hook(tickMethod, "MovementComponent.Tick", 
+                 (void *)Hooked_MovementComponent_Tick, &s_origMoveTick)) {
+          Log("[GF2] MovementComponent.Tick hooked via il2cpp");
+        } else {
+          Log("[GF2] WARN: Hook() failed for MovementComponent.Tick");
+        }
+      } else {
+        Log("[GF2] WARN: MovementComponent.Tick method not found");
+      }
+
+      const char *floorNames[] = {"currentFloor"};
+      const char *matchedName = nullptr;
+      int off = FindFieldInHierarchy(moveCompClass, floorNames, 1, &matchedName);
+      if (off >= 0) {
+        g_offCurrentFloor = off;
+        Log("[GF2] currentFloor offset = 0x%X", off);
+      } else {
+        Log("[GF2] WARN: currentFloor field not found, using default 0x2e8");
+      }
+      
+      g_findFloorMethod = FindMethod(moveCompClass, "FindFloor", 3);
+      Log("[GF2] FindFloor method = %p", g_findFloorMethod);
+      
+      const char *entityNames[] = {"m_entity", "entity"};
+      const char *entMatch = nullptr;
+      int entOff = FindFieldInHierarchy(moveCompClass, entityNames, 2, &entMatch);
+      if (entOff >= 0) {
+        g_offBaseCompEntity = entOff;
+        Log("[GF2] BaseComponent.entity offset = 0x%X (%s)", entOff, entMatch);
+      } else {
+        Log("[GF2] WARN: entity field not found, using default 0x50");
+      }
+    } else {
+      Log("[GF2] WARN: MovementComponent class not found");
+    }
+
+    void *updateSolverAddr = (void *)(gaBase2 + 0x0326A380);
+    if (MH_CreateHook(updateSolverAddr, (void *)Hooked_IK_UpdateSolver,
+                      &s_origUpdateSolver) == MH_OK) {
+      MH_EnableHook(updateSolverAddr);
+      Log("[IK] BipedIK.UpdateSolver hooked at %p (orig=%p)", updateSolverAddr, s_origUpdateSolver);
+    } else {
+      Log("[IK] WARN: Failed to hook BipedIK.UpdateSolver at %p", updateSolverAddr);
+    }
+
+    void *onUpdateAddr = (void *)(gaBase2 + 0x032759E0);
+    if (MH_CreateHook(onUpdateAddr, (void *)Hooked_OnUpdate,
+                      &s_origOnUpdate) == MH_OK) {
+      MH_EnableHook(onUpdateAddr);
+      Log("[IK] IKSolverTrigonometric.OnUpdate hooked at %p (orig=%p)", onUpdateAddr, s_origOnUpdate);
+    } else {
+      Log("[IK] WARN: Failed to hook IKSolverTrigonometric.OnUpdate at %p", onUpdateAddr);
+    }
   }
 
   void *pcClass =

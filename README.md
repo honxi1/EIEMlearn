@@ -35,15 +35,22 @@
 - **面部表情**：AIUEO、眨眼、笑眼等基础表情
 - **相机运动**：VMD 相机关键帧（含角色朝向对齐）
 - **音频同步**：MCI 后端播放 WAV/MP3 BGM
+- **地形与台阶跟随**：实时地面碰撞探测，支持上下坡与台阶楼梯自适应吸附
+- **游戏原生 IK**：支持使用 VMD 足部 IK 数据驱动游戏原生 BipedIK 解算器
+
+### 实现中
+- **VMD直接播放模式**
+- 
 
 ### 已计划
-- VMD直接播放模式
 - 多角色同屏播放
 - ...
 
 ## 下载
 
 您可以在 [Releases](https://github.com/Sasye/EIEM/releases) 下载最新发布版或从源代码自行编译。
+
+> 使用 [Applepie Manager](https://github.com/Sasye/ApplepieManager) 来便捷地管理和配置此插件。
 
 ## 安装
 

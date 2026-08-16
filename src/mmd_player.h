@@ -251,7 +251,6 @@ struct MmdPlayer {
         currentTime = fmodf(currentTime, totalDuration);
       } else {
         currentTime = totalDuration;
-        playing = false;
       }
     }
 
