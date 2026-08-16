@@ -1067,11 +1067,50 @@ static DWORD WINAPI InitThread(LPVOID) {
             }
           }
           orig_SetMainCharacter(self, entity, flag);
+
+          s_ikDisabled = false;
+          memset(s_bipedIK, 0, sizeof(s_bipedIK));
+          s_bipedIKCount = 0;
+          memset(s_grounderIK, 0, sizeof(s_grounderIK));
+          s_grounderIKCount = 0;
+          memset(s_followDamper, 0, sizeof(s_followDamper));
+          s_followDamperCount = 0;
+          s_animatorMono = nullptr;
+          s_bbcCount = 0;
+          s_bbcMethodsResolved = false;
+          s_skirtBBCIndex = -1;
+          memset(s_bbcInstances, 0, sizeof(s_bbcInstances));
+
+          s_cachedMovementComp = nullptr;
+          s_cachedEntity = nullptr;
+          s_footIKFirstCaptured = false;
+          s_footIKCalibrated = false;
+          s_footPosBaseCaptured = false;
+          s_initialRootCaptured = false;
+          s_baseGroundCaptured = false;
+          s_baseGroundY = 0.0f;
+          s_smoothedGroundDelta = 0.0f;
+          s_lfBaseCaptured = false;
+          s_lfBaseGround = 0.0f;
+          s_rfBaseCaptured = false;
+          s_rfBaseGround = 0.0f;
+          g_groundDeltaY = 0.0f;
+          g_activeLfSolver = nullptr;
+          g_activeRfSolver = nullptr;
+          g_mmdIKActive = false;
+
+          g_fingerTransformsResolved = false;
+          g_fingerRestCaptured = false;
+          memset(g_fingerTransforms, 0, sizeof(g_fingerTransforms));
+
           g_confirmedSMC = nullptr;
           g_skeletalMorphCore = nullptr;
           g_boneMapReady = false;
           ResetFaceCache();
-          Log("[SWITCH] SMC tracking reset for new character");
+          ResetSkirtState();
+          s_firstFrame = true;
+          Log("[SWITCH] Full character state reset for new character: Entity=%p Animator=%p",
+              g_mainCharEntity, g_cachedAnimator);
         }
       };
 

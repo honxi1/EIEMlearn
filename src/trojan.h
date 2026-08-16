@@ -820,44 +820,10 @@ static void __fastcall Hooked_MovementComponent_Tick(void *self, float deltaTime
     __try {
       void *entity = *(void **)((char *)self + g_offBaseCompEntity);
       if (entity && (uintptr_t)entity > 0x10000) {
-        void *klass = il2cpp_object_get_class(entity);
-        if (klass) {
-          const char *cn = il2cpp_class_get_name(klass);
-          if (cn && strcmp(cn, "Entity") == 0) {
-            void *getSkMorph = nullptr;
-            void *miter = nullptr;
-            while (void *m = il2cpp_class_get_methods(klass, &miter)) {
-              const char *mn = il2cpp_method_get_name(m);
-              if (mn && strcmp(mn, "get_skMorphCom") == 0) {
-                getSkMorph = (void *)m;
-                break;
-              }
-            }
-            if (getSkMorph) {
-              void *exc = nullptr;
-              void *skMorphComp = il2cpp_runtime_invoke(getSkMorph, entity, nullptr, &exc);
-              if (skMorphComp && !exc) {
-                if (OFF_skMorphCompCore < 0) {
-                  void *smcCompClass = il2cpp_object_get_class(skMorphComp);
-                  if (smcCompClass) {
-                    const char *coreNames[] = {"m_core", "core", "_core", "m_skeletalMorphCore"};
-                    int resolved = FindFieldInHierarchy(smcCompClass, coreNames, 4, nullptr);
-                    if (resolved >= 0) {
-                      OFF_skMorphCompCore = resolved;
-                      Log("[GF2-HOOK] Resolved SkeletalMorphComponent.m_core offset = 0x%X", resolved);
-                    }
-                  }
-                }
-                int coreOff = SafeOff(OFF_skMorphCompCore, 0x150, "skMorphCompCore");
-                void *core = *(void **)((char *)skMorphComp + coreOff);
-                if (core == g_confirmedSMC) {
-                  s_cachedMovementComp = self;
-                  s_cachedEntity = entity;
-                  Log("[GF2-HOOK] MATCH! MovementComponent=%p Entity=%p", self, entity);
-                }
-              }
-            }
-          }
+        if (entity == g_mainCharEntity || !g_mainCharEntity) {
+          s_cachedMovementComp = self;
+          s_cachedEntity = entity;
+          Log("[GF2-HOOK] MATCH! MovementComponent=%p Entity=%p", self, entity);
         }
       }
     } __except(1) {}
@@ -1201,9 +1167,9 @@ static void ApplyMmdPoseOnMainThread() {
         float qx = g_initialRootQuat[0], qy = g_initialRootQuat[1];
         float qz = g_initialRootQuat[2], qw = g_initialRootQuat[3];
 
-        float vxL = -(ikSample.leftPos.x - s_firstLeftFootIK[0]) * IK_SCALE;
-        float vyL =  (ikSample.leftPos.y - s_firstLeftFootIK[1]) * IK_SCALE;
-        float vzL = -(ikSample.leftPos.z - s_firstLeftFootIK[2]) * IK_SCALE;
+        float vxL = -(ikSample.leftPos.x - s_firstCenterDisp.x) * IK_SCALE;
+        float vyL =  (ikSample.leftPos.y) * IK_SCALE;
+        float vzL = -(ikSample.leftPos.z - s_firstCenterDisp.z) * IK_SCALE;
         float txL = 2.0f * (qy * vzL);
         float tyL = 2.0f * (qz * vxL - qx * vzL);
         float tzL = 2.0f * (-qy * vxL);
@@ -1211,9 +1177,9 @@ static void ApplyMmdPoseOnMainThread() {
         g_ikDeltaLf[1] = vyL;
         g_ikDeltaLf[2] = vzL + qw * tzL + (-qy * txL);
 
-        float vxR = -(ikSample.rightPos.x - s_firstRightFootIK[0]) * IK_SCALE;
-        float vyR =  (ikSample.rightPos.y - s_firstRightFootIK[1]) * IK_SCALE;
-        float vzR = -(ikSample.rightPos.z - s_firstRightFootIK[2]) * IK_SCALE;
+        float vxR = -(ikSample.rightPos.x - s_firstCenterDisp.x) * IK_SCALE;
+        float vyR =  (ikSample.rightPos.y) * IK_SCALE;
+        float vzR = -(ikSample.rightPos.z - s_firstCenterDisp.z) * IK_SCALE;
         float txR = 2.0f * (qy * vzR);
         float tyR = 2.0f * (qz * vxR - qx * vzR);
         float tzR = 2.0f * (-qy * vxR);
@@ -1346,10 +1312,10 @@ static void ApplyMmdPoseOnMainThread() {
       s_footIKCalibrated = true;
     }
 
-    float footX_L = s_gameFootInitL[0] + g_ikDeltaLf[0];
-    float footZ_L = s_gameFootInitL[2] + g_ikDeltaLf[2];
-    float footX_R = s_gameFootInitR[0] + g_ikDeltaRf[0];
-    float footZ_R = s_gameFootInitR[2] + g_ikDeltaRf[2];
+    float footX_L = s_initialRootPos[0] + g_ikDeltaLf[0];
+    float footZ_L = s_initialRootPos[2] + g_ikDeltaLf[2];
+    float footX_R = s_initialRootPos[0] + g_ikDeltaRf[0];
+    float footZ_R = s_initialRootPos[2] + g_ikDeltaRf[2];
 
     if (g_findFloorMethod && s_cachedMovementComp &&
         g_camGetPos && g_camGetRot && g_component_get_transform) {
@@ -1528,11 +1494,8 @@ static void ApplyMmdPoseOnMainThread() {
   }
 
 
-  if (g_mmdHasArmBones && g_muscleAnim && g_muscleAnim->hasArmBones &&
-      g_cachedAnimator) {
-
-    if (!s_ikDisabled) {
-      s_ikDisabled = true;
+  if (!s_ikDisabled && g_cachedAnimator) {
+    s_ikDisabled = true;
 
       void *animatorGO = nullptr;
       __try {
@@ -1761,6 +1724,8 @@ static void ApplyMmdPoseOnMainThread() {
 
           if (s_bipedIKCount == 0)
             Log("[IK-DISABLE] WARNING: BipedIK not found!");
+          else
+            ConfigureIKComponents(g_footIKEnabled);
 
           if (s_bbcCount > 0 && !s_bbcMethodsResolved) {
             s_bbcMethodsResolved = true;
@@ -1983,7 +1948,6 @@ static void ApplyMmdPoseOnMainThread() {
     s_fingerDiag++;
   }
 
-  }
 
   static int s_cnt = 0;
   s_cnt++;
