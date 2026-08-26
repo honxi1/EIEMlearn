@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 为《明日方舟：终末地》开发一个独立游戏内摄影摆姿插件（Poser）：冻结角色 → 用 FK/IK 摆姿势 → 调形态键（面部 BlendShape + 身体骨骼形态）→ 自由相机取景 → 截图出片。
+**Goal:** 为《明日方舟：终末地》开发一个独立游戏内摄影摆姿插件（Poser）：**让角色进入静止可摆姿状态——抑制动画/IK/形态/布料对骨骼的覆盖，保证摆好的姿势稳定、不被动画打回** → 用 FK/IK 摆姿势 → 调形态键（面部 BlendShape + 身体骨骼形态）→ 自由相机取景 → 截图出片。全局时间冻结为可选增强，延后实施。
 
 **Architecture:** 沿用 EIEM 的成熟注入链路（代理 DLL + Applepie 插件宿主 + IL2CPP 运行时解析 + MinHook），但**不引入 MMD 重定向/动画解析**——直接对游戏自身骨骼（Animator Humanoid 骨骼 + 原生 FinalIK）做读写。整体分四层：`core`（注入/IL2CPP/hook 基础）、`math`（纯 C++：四元数、2-bone IK、姿态文件，可单测）、`game`（冻结/角色捕获/形态键）、`editor`（ImGui + ImGuizmo 界面与摄影）。
 
