@@ -5,9 +5,21 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 插件 DLL（仅 Windows/MSVC；沙箱 Linux 跳过）
 if(WIN32)
+  # ImGuizmo 源文件（依赖 deps/imguizmo，未放置时自动跳过——此时 editor 层需手编）
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/deps/imguizmo/ImGuizmo.cpp")
+    set(POSER_IMGUIZMO_SRC deps/imguizmo/ImGuizmo.cpp)
+  else()
+    set(POSER_IMGUIZMO_SRC "")
+  endif()
   add_library(poser SHARED
     src/poser.cpp
+    src/config.h
     src/core/proxy_d3dcompiler.cpp
+    src/core/game_hooks.h
+    src/core/gui_overlay.h
+    src/game/skeleton.h src/game/freeze.h src/game/accessory.h src/game/ik_driver.h src/game/morph.h
+    src/editor/gizmo.h src/editor/panel_pose.h src/editor/panel_library.h src/editor/panel_mode.h src/editor/panel_morph.h src/editor/panel_camera.h
+    ${POSER_IMGUIZMO_SRC}
   )
   target_include_directories(poser PRIVATE
     deps deps/imgui deps/imguizmo deps/minhook/include deps/json deps/stb src)
