@@ -9,3 +9,6 @@ bin/
 !deps/**/*.lib
 !deps/**/*.dll
 !deps/**/*.pdb
+
+# 独立项目 Endfield Poser（自包含仓库，不从属于 EIEM）
+/endfield-poser/
